@@ -7,9 +7,8 @@ import shapely.wkt
 import matplotlib.pyplot as plt
 import descartes
 import numpy as np
+import csv
 
-"""This code was an exercise to connect to the postgreSQL database and visualize multiple datasets
-in one single plot. """
 
 def plotSome_buildings(building_data, type, road_list):
     # order of operations:
@@ -120,15 +119,37 @@ def get_roads():
 
 
 
-fields = pd.read_fwf("http://weather.tudelft.nl/csv/fields.txt", header=None)
-new = np.transpose(fields)
-new = new.drop(new.index[0])
-for h in new:
-    print(h)
-with open("weather.csv", "w") as the_file:
-    for h in new:
-        the_file.write('h')
+# fields = pd.read_fwf("http://weather.tudelft.nl/csv/fields.txt", header=None)
+# weather_head = []
+# for h in fields[1]:
+#     weather_head.append(h)
+# #
+# # print('banananan')
+# #
+# # with open("weather.csv", "w") as filepointer:
+# #     for item in weather_head:
+# #         filepointer.write("%s, "%item)
+#
+# initial_data = pd.read_csv("http://weather.tudelft.nl/csv/Delfshaven.csv", header=None).tail(20)._get_values
+# weather_data = []
+# for row in initial_data:
+#     weather_data.append(list(row))
+#
+# weather_data.insert(0, weather_head)
+# with open("test_file.csv", 'w', newline="") as f:
+#     writer = csv.writer(f)
+#     writer.writerows(weather_data)
+
+data = []
+temp_data = []
+with open("test_file.csv", 'r') as my_file:
+    reader = csv.reader(my_file)
+    data = list(reader)
+    print('my banana is bigger than yours')
+
+
 print('banana')
+
 
 try:
     connection = psycopg2.connect(user = "postgres",
@@ -146,6 +167,10 @@ try:
     # fad(get_roads(), plot=True)
 
     windDirection = 45
+
+    # some_buildings = tall_buildings(get_roads())
+
+
 
     # my_target = tall_buildings(get_roads())
 
