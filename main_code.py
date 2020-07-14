@@ -4,6 +4,7 @@ import psycopg2
 from psycopg2 import Error
 import shapely
 import shapely.wkt
+from shapely.geometry import Point, LineString, LinearRing
 import matplotlib.pyplot as plt
 import descartes
 import numpy as np
@@ -119,6 +120,9 @@ def get_roads():
 
 
 
+
+
+
 # fields = pd.read_fwf("http://weather.tudelft.nl/csv/fields.txt", header=None)
 # weather_head = []
 # for h in fields[1]:
@@ -140,15 +144,24 @@ def get_roads():
 #     writer = csv.writer(f)
 #     writer.writerows(weather_data)
 
-data = []
-temp_data = []
-with open("test_file.csv", 'r') as my_file:
-    reader = csv.reader(my_file)
-    data = list(reader)
-    print('my banana is bigger than yours')
+# data = []
+# temp_data = []
+# with open("test_file.csv", 'r') as my_file:
+#     reader = csv.reader(my_file)
+#     data = list(reader)
+#     print('my banana is bigger than yours')
+#
+#
+# print('banana')
 
 
-print('banana')
+def windDirection(angle):
+    """geometry rotates counter clockwise"""
+    pass
+def line_function(geom):
+    """Get the function of the line to check direction, create a table for every line seg"""
+
+    pass
 
 
 try:
@@ -168,11 +181,34 @@ try:
 
     windDirection = 45
 
-    # some_buildings = tall_buildings(get_roads())
+    some_buildings = tall_buildings(get_roads())
+    targets = []
+    exterior_id = 0
 
+    # buildings = ((data["id"], data["exterior"]) for data in some_buildings)
 
+    for i in some_buildings:
+        targets.append({'id':i['id'], 'exterior':i['geometry'], 'ccw':i['geometry'].exterior.is_ccw})
 
-    # my_target = tall_buildings(get_roads())
+    big_coords = []
+    for ring in targets:
+        if ring['ccw']:
+            x = ring['exterior'].exterior.coords.xy[0]
+            y = ring['exterior'].exterior.coords.xy[1]
+            point_list = list(zip(x,y))
+            for j in range(0, len(point_list)):
+                A = Point(point_list[j])
+                B = Point(point_list[j+1])
+                AB = LineString([A, B])
+
+                print('banana')
+
+            # wkt_vertices = [ring['exterior'][12:-1]]
+            # coords = (i.split(', ') for i in wkt_vertices)
+            # big_coords.append(list(coords))
+            print('banana')
+        # print('banana')
+    print('banana')
 
     # df = pd.read_csv("http://weather.tudelft.nl/csv/Delfshaven.csv", header=None).tail(20)
     # whatsthis = df.to_string()
