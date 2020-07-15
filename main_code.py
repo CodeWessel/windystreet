@@ -9,6 +9,7 @@ import matplotlib.pyplot as plt
 import descartes
 import numpy as np
 import csv
+import math
 
 
 def plotSome_buildings(building_data, type, road_list):
@@ -28,11 +29,11 @@ def plotSome_buildings(building_data, type, road_list):
         ax = gdf.plot(column='density', k=5, cmap='hot', legend=True, vmax=300, vmin=0)
 
     if road_list[0]['geometry'] is not None:
-            gpd.GeoDataFrame(road_list, crs='epsg:28992').set_index('id').plot(ax=ax, color='G', linewidth=0.5)
-
+        gpd.GeoDataFrame(road_list, crs='epsg:28992').set_index('id').plot(ax=ax, color='G', linewidth=0.5)
 
     print('Plotting: ', '{}'.format(type))
     plt.show()
+
 
 def building_density(building_data):
     """No longer necessary"""
@@ -57,6 +58,7 @@ def building_density(building_data):
 
     return density_list
 
+
 def tall_buildings(road_list, plot=None):
     """Select buildings based on threshold and based on buffer"""
     try:
@@ -68,7 +70,7 @@ def tall_buildings(road_list, plot=None):
         my_tallBuildings = []
 
         for tall in record_tallBuilding:
-            my_tallRecord = {'id':tall[0], 'geometry':shapely.wkt.loads(tall[1]), 'height':tall[2]}
+            my_tallRecord = {'id': tall[0], 'geometry': shapely.wkt.loads(tall[1]), 'height': tall[2]}
             my_tallBuildings.append(my_tallRecord)
 
         if plot:
@@ -79,6 +81,7 @@ def tall_buildings(road_list, plot=None):
 
     except(Exception, psycopg2.Error) as error:
         print("Error while trying Tall Buildings: ", error)
+
 
 def fad(road_data, plot=None):
     try:
@@ -101,6 +104,7 @@ def fad(road_data, plot=None):
     except(Exception, psycopg2.Error) as error:
         print("Error during fad:", error)
 
+
 def get_roads():
     try:
         my_roadQuery = 'SELECT id, ST_asText(geom), stt_naam FROM wegvakken;'
@@ -117,10 +121,6 @@ def get_roads():
 
     except(Exception, psycopg2.Error) as error:
         print("Error while retrieving road data:", error)
-
-
-
-
 
 
 # fields = pd.read_fwf("http://weather.tudelft.nl/csv/fields.txt", header=None)
@@ -156,30 +156,44 @@ def get_roads():
 
 
 def windDirection(angle):
-    """geometry rotates counter clockwise"""
+    """Rewrites wind direction in degrees to linear function"""
+
     pass
+
+
 def line_function(geom):
     """Get the function of the line to check direction, create a table for every line seg"""
 
     pass
 
 
+def azimuth(pointA, pointB):
+    # A_x, A_y = pointA
+    # B_x, B_y = pointB
+    # angle = np.arctan(B_x - A_x, B_y - A_y)
+
+    angle = np.arctan2(pointB.x - pointA.x, pointB.y - pointA.y)
+
+    return np.degrees(angle)
+
+
 try:
-    connection = psycopg2.connect(user = "postgres",
-                                  password = "0000000",
-                                  host = "127.0.0.1",
-                                  port = "5432",
-                                  database = "thesisData")
+    connection = psycopg2.connect(user="postgres",
+                                  password="0000000",
+                                  host="127.0.0.1",
+                                  port="5432",
+                                  database="thesisData")
 
     cursor = connection.cursor()
 
     # Print PostgreSQL Connection properties
-    print(connection.get_dsn_parameters(),"\n")
+    print(connection.get_dsn_parameters(), "\n")
 
     # tall_buildings(get_roads(), plot=True)
     # fad(get_roads(), plot=True)
 
-    windDirection = 45
+    my_wind =
+    actual_wind = math.radians(45) + math.pi
 
     some_buildings = tall_buildings(get_roads())
     targets = []
@@ -189,50 +203,66 @@ try:
     # buildings = ((data["id"], data["exterior"]) for data in some_buildings)
 
     for i in some_buildings:
-        targets.append({'id':i['id'], 'geometry':i['geometry'], 'ccw':i['geometry'].exterior.is_ccw, 'height':i['height']})
+        targets.append(
+            {'id': i['id'], 'geometry': i['geometry'], 'ccw': i['geometry'].exterior.is_ccw, 'height': i['height']})
 
     big_coords = []
     for ring in targets:
         if ring['ccw']:
             x = ring['geometry'].exterior.coords.xy[0]
             y = ring['geometry'].exterior.coords.xy[1]
-            point_list = list(zip(x,y))
+            point_list = list(zip(x, y))
             for j in range(0, len(point_list)):
                 A = Point(point_list[j])
 
-                if j == (len(point_list)-1):
+                if j == (len(point_list) - 1):
                     B = Point(point_list[0])
                 else:
-                    B = Point(point_list[j+1])
+                    B = Point(point_list[j + 1])
 
                 AB = LineString([A, B])
-                facade_area = AB.length*ring['height']
+                facade_area = AB.length * ring['height']
                 Ax = float(A.x)
                 Ay = float(A.y)
                 Bx = float(B.x)
                 By = float(B.y)
 
-                # to calculate normal, first find f(x) from two points
-                # y = slope * x + b
-                slope = (Ay - By)/(Ax - Bx)
-                b = Ay - (slope*Ax)
-                # y_normal = (-1/slope)(float(AB.centroid.xy[0]) - Ax) + Ay
-                slope_normal = (-1/slope)
-                b_normal = -(slope_normal*Ax) + Ay
+                # # to calculate normal, first find f(x) from two points
+                # # y = slope * x + b
+                # slope = (Ay - By)/(Ax - Bx)
+                # b = Ay - (slope*Ax)
+                # # y_normal = (-1/slope)(float(AB.centroid.xy[0]) - Ax) + Ay
+                # slope_normal = (-1/slope)
+                # b_normal = -(slope_normal*Ax) + Ay
 
                 # angle between wind direction and normal
+                my_radians = math.radians(my_wind)
+                circle = A.buffer(AB.length)
+                my_azimuth = azimuth(A, B)
 
+                attack = math.degrees(math.radians(my_azimuth) - math.radians(my_wind))
+                if attack > -90 and attack < 90:
+                    windward = 1
+                # elif attack < -180 and attack > -360:
+                #     windward = 1
+                else:
+                    windward = 0
 
-
-                exploded_targets.append({'id':ring['id'],
-                                           'segment_id':j,
-                                           # 'geometry':ring['geometry'],
-                                           'start':A,
-                                           'end':B,
-                                           'linestring':AB,
-                                           'height':ring['height'],
-                                           'facade_area':facade_area})
-
+                exploded_targets.append({'id': ring['id'],
+                                         'segment_id': j,
+                                         # 'geometry':ring['geometry'],
+                                         'start': A,
+                                         'end': B,
+                                         'geometry': AB,
+                                         'height': ring['height'],
+                                         'facade_area': facade_area,
+                                         'azimuth': my_azimuth,
+                                         'windward': windward,
+                                         'attack': attack})
+                print('banana')
+                gdf = gpd.GeoDataFrame(exploded_targets, crs='epsg:28992').set_index('id')
+                ax = gdf.plot(column='windward', k=10, cmap='viridis', legend=True)
+                plt.show()
                 print('banana')
 
             # wkt_vertices = [ring['exterior'][12:-1]]
@@ -241,7 +271,7 @@ try:
             print('banana')
         # print('banana')
     gdf = gpd.GeoDataFrame(exploded_targets[0:8], crs='epsg:28992').set_index('id')
-    ax = gdf.plot(column='facade_area', k=10, cmap='viridis', legend=True)
+    ax = gdf.plot(column='windward', k=10, cmap='viridis', legend=True)
     plt.show()
 
     print('banana')
@@ -250,23 +280,17 @@ try:
     # whatsthis = df.to_string()
     # with open("weather.csv", mode=w):
 
-
-
-
     # for record in my_target:
-
-
 
     print('banana')
 
 
-except(Exception, psycopg2.Error) as error :
+except(Exception, psycopg2.Error) as error:
     print("Error while connecting to PostgreSQL", error)
 
 finally:
-    #closing database connection.
-        if(connection):
-            cursor.close()
-            connection.close()
-            print("PostgreSQL connection is closed")
-
+    # closing database connection.
+    if (connection):
+        cursor.close()
+        connection.close()
+        print("PostgreSQL connection is closed")
