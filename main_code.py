@@ -184,22 +184,54 @@ try:
     some_buildings = tall_buildings(get_roads())
     targets = []
     exterior_id = 0
+    exploded_targets = []
 
     # buildings = ((data["id"], data["exterior"]) for data in some_buildings)
 
     for i in some_buildings:
-        targets.append({'id':i['id'], 'exterior':i['geometry'], 'ccw':i['geometry'].exterior.is_ccw})
+        targets.append({'id':i['id'], 'geometry':i['geometry'], 'ccw':i['geometry'].exterior.is_ccw, 'height':i['height']})
 
     big_coords = []
     for ring in targets:
         if ring['ccw']:
-            x = ring['exterior'].exterior.coords.xy[0]
-            y = ring['exterior'].exterior.coords.xy[1]
+            x = ring['geometry'].exterior.coords.xy[0]
+            y = ring['geometry'].exterior.coords.xy[1]
             point_list = list(zip(x,y))
             for j in range(0, len(point_list)):
                 A = Point(point_list[j])
-                B = Point(point_list[j+1])
+
+                if j == (len(point_list)-1):
+                    B = Point(point_list[0])
+                else:
+                    B = Point(point_list[j+1])
+
                 AB = LineString([A, B])
+                facade_area = AB.length*ring['height']
+                Ax = float(A.x)
+                Ay = float(A.y)
+                Bx = float(B.x)
+                By = float(B.y)
+
+                # to calculate normal, first find f(x) from two points
+                # y = slope * x + b
+                slope = (Ay - By)/(Ax - Bx)
+                b = Ay - (slope*Ax)
+                # y_normal = (-1/slope)(float(AB.centroid.xy[0]) - Ax) + Ay
+                slope_normal = (-1/slope)
+                b_normal = -(slope_normal*Ax) + Ay
+
+                # angle between wind direction and normal
+
+
+
+                exploded_targets.append({'id':ring['id'],
+                                           'segment_id':j,
+                                           # 'geometry':ring['geometry'],
+                                           'start':A,
+                                           'end':B,
+                                           'linestring':AB,
+                                           'height':ring['height'],
+                                           'facade_area':facade_area})
 
                 print('banana')
 
@@ -208,6 +240,10 @@ try:
             # big_coords.append(list(coords))
             print('banana')
         # print('banana')
+    gdf = gpd.GeoDataFrame(exploded_targets[0:8], crs='epsg:28992').set_index('id')
+    ax = gdf.plot(column='facade_area', k=10, cmap='viridis', legend=True)
+    plt.show()
+
     print('banana')
 
     # df = pd.read_csv("http://weather.tudelft.nl/csv/Delfshaven.csv", header=None).tail(20)
