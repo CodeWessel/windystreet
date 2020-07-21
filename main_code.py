@@ -122,37 +122,38 @@ def get_roads():
     except(Exception, psycopg2.Error) as error:
         print("Error while retrieving road data:", error)
 
+def get_weather():
 
-# fields = pd.read_fwf("http://weather.tudelft.nl/csv/fields.txt", header=None)
-# weather_head = []
-# for h in fields[1]:
-#     weather_head.append(h)
-# #
-# # print('banananan')
-# #
-# # with open("weather.csv", "w") as filepointer:
-# #     for item in weather_head:
-# #         filepointer.write("%s, "%item)
-#
-# initial_data = pd.read_csv("http://weather.tudelft.nl/csv/Delfshaven.csv", header=None).tail(20)._get_values
-# weather_data = []
-# for row in initial_data:
-#     weather_data.append(list(row))
-#
-# weather_data.insert(0, weather_head)
-# with open("test_file.csv", 'w', newline="") as f:
-#     writer = csv.writer(f)
-#     writer.writerows(weather_data)
+    fields = pd.read_fwf("http://weather.tudelft.nl/csv/fields.txt", header=None)
+    weather_head = []
+    for h in fields[1]:
+        weather_head.append(h)
+    #
+    # print('banananan')
+    #
+    # with open("weather.csv", "w") as filepointer:
+    #     for item in weather_head:
+    #         filepointer.write("%s, "%item)
 
-# data = []
-# temp_data = []
-# with open("test_file.csv", 'r') as my_file:
-#     reader = csv.reader(my_file)
-#     data = list(reader)
-#     print('my banana is bigger than yours')
-#
-#
-# print('banana')
+    initial_data = pd.read_csv("http://weather.tudelft.nl/csv/Delfshaven.csv", header=None).tail(20)._get_values
+    weather_data = []
+    for row in initial_data:
+        weather_data.append(list(row))
+
+    weather_data.insert(0, weather_head)
+    with open("test_file.csv", 'w', newline="") as f:
+        writer = csv.writer(f)
+        writer.writerows(weather_data)
+    #
+    # data = []
+    # temp_data = []
+    # with open("test_file.csv", 'r') as my_file:
+    #     reader = csv.reader(my_file)
+    #     data = list(reader)
+    #     print('my banana is bigger than yours')
+    #
+    #
+    # print('banana')
 
 
 def windDirection(angle):
@@ -172,7 +173,7 @@ def azimuth(pointA, pointB):
     # B_x, B_y = pointB
     # angle = np.arctan(B_x - A_x, B_y - A_y)
 
-    angle = np.arctan2(pointB.x - pointA.x, pointB.y - pointA.y)
+    angle = np.arctan2(pointB.y - pointA.y, pointB.x - pointA.x)
 
     return np.degrees(angle)
 
@@ -191,9 +192,11 @@ try:
 
     # tall_buildings(get_roads(), plot=True)
     # fad(get_roads(), plot=True)
+    # get_weather()
 
-    my_wind =
-    actual_wind = math.radians(45) + math.pi
+    my_wind = 345
+    actual_wind = (math.radians(my_wind) + math.pi) % (2*math.pi)
+    print("my wind: ", my_wind, "my actualy wind: ", math.degrees(actual_wind))
 
     some_buildings = tall_buildings(get_roads())
     targets = []
@@ -240,13 +243,54 @@ try:
                 circle = A.buffer(AB.length)
                 my_azimuth = azimuth(A, B)
 
-                attack = math.degrees(math.radians(my_azimuth) - math.radians(my_wind))
-                if attack > -90 and attack < 90:
-                    windward = 1
-                # elif attack < -180 and attack > -360:
+                attack = abs((math.degrees(actual_wind) - my_azimuth)%360)
+
+                # s1
+                if Ax < Bx and Ay < By:
+                    if my_azimuth < my_wind < (my_azimuth+180):
+                        windward = 1
+                    else:
+                        windward = 0
+                # s2
+                elif Ax > Bx and Ay < By:
+                    if (my_azimuth+180) < my_wind < (my_azimuth+360):
+                        windward = 1
+                    else:
+                        windward = 0
+                # s3 ! here I flip the wind angle for convenience
+                elif Ax > Bx and Ay > By:
+                    # if my_azimuth < my_wind < (my_azimuth+180):
+                    #     windward = 1
+                    if (my_azimuth+180) < ((my_wind+180)%360) < ((my_azimuth+360)%360):
+                        windward = 1
+                    else:
+                        windward = 0
+                # s4
+                elif Ax < Bx and Ay > By:
+                    if my_azimuth < ((my_wind+180)%360) < (my_azimuth+180):
+                        windward = 1
+                    else:
+                        windward = 0
+
+
+                    # if my_azimuth < my_wind < ((my_azimuth+180)%360):
+                    #     windward = 1
+
+                # # b1
+                # if Ax < Bx:
+                #     if -90 < my_azimuth < 0:
+                #
+                #
+                #     pass
+                # if Ax > Bx:
+                #     pass
+                #
+                # if attack < 90:
                 #     windward = 1
-                else:
-                    windward = 0
+                # # elif attack < -180 and attack > -360:
+                # #     windward = 1
+                # else:
+                #     windward = 0
 
                 exploded_targets.append({'id': ring['id'],
                                          'segment_id': j,
@@ -257,23 +301,25 @@ try:
                                          'height': ring['height'],
                                          'facade_area': facade_area,
                                          'azimuth': my_azimuth,
-                                         'windward': windward,
-                                         'attack': attack})
-                print('banana')
-                gdf = gpd.GeoDataFrame(exploded_targets, crs='epsg:28992').set_index('id')
-                ax = gdf.plot(column='windward', k=10, cmap='viridis', legend=True)
-                plt.show()
-                print('banana')
+                                         'windward': windward})
+
+                if len(exploded_targets) > 8:
+                    gdf = gpd.GeoDataFrame(exploded_targets[8:], crs='epsg:28992').set_index('id')
+                    ax = gdf.plot(column='windward', k=10, cmap='viridis', legend=True)
+                    plt.show()
+                    print('banana')
 
             # wkt_vertices = [ring['exterior'][12:-1]]
             # coords = (i.split(', ') for i in wkt_vertices)
             # big_coords.append(list(coords))
-            print('banana')
+            # print('banana')
         # print('banana')
-    gdf = gpd.GeoDataFrame(exploded_targets[0:8], crs='epsg:28992').set_index('id')
-    ax = gdf.plot(column='windward', k=10, cmap='viridis', legend=True)
-    plt.show()
+    gdf = gpd.GeoDataFrame(exploded_targets[8:36], crs='epsg:28992').set_index('id')
 
+    ax = gdf.plot(column='windward', k=10, cmap='viridis', legend=True)
+    plt.savefig('temp_plot.png', dpi=1080)
+
+    plt.show()
     print('banana')
 
     # df = pd.read_csv("http://weather.tudelft.nl/csv/Delfshaven.csv", header=None).tail(20)
