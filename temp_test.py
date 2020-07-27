@@ -162,6 +162,122 @@ try:
 
     print('banana')
 
+    ### copy paste just in case
+    #
+    # my_wind = 90
+    #
+    # some_buildings = tall_buildings(get_roads())
+    # targets = []
+    # exterior_id = 0
+    # exploded_targets = []
+    #
+    # # buildings = ((data["id"], data["exterior"]) for data in some_buildings)
+    #
+    # for i in some_buildings:
+    #     targets.append(
+    #         {'id': i['id'], 'geometry': i['geometry'], 'ccw': i['geometry'].exterior.is_ccw, 'height': i['height']})
+    #
+    # big_coords = []
+    # for ring in targets:
+    #     if ring['ccw']:
+    #         x = ring['geometry'].exterior.coords.xy[0]
+    #         y = ring['geometry'].exterior.coords.xy[1]
+    #         point_list = list(zip(x, y))
+    #         for j in range(0, len(point_list)):
+    #             A = Point(point_list[j])
+    #
+    #             if j == (len(point_list) - 1):
+    #                 B = Point(point_list[0])
+    #             else:
+    #                 B = Point(point_list[j + 1])
+    #
+    #             AB = LineString([A, B])
+    #             facade_area = AB.length * ring['height']
+    #             Ax = float(A.x)
+    #             Ay = float(A.y)
+    #             Bx = float(B.x)
+    #             By = float(B.y)
+    #
+    #             # # to calculate normal, first find f(x) from two points
+    #             # # y = slope * x + b
+    #             # slope = (Ay - By)/(Ax - Bx)
+    #             # b = Ay - (slope*Ax)
+    #             # # y_normal = (-1/slope)(float(AB.centroid.xy[0]) - Ax) + Ay
+    #             # slope_normal = (-1/slope)
+    #             # b_normal = -(slope_normal*Ax) + Ay
+    #
+    #             # angle between wind direction and normal
+    #             my_radians = math.radians(my_wind)
+    #             circle = A.buffer(AB.length)
+    #             my_azimuth = azimuth(A, B)
+    #
+    #             attack = abs((math.degrees(actual_wind) - my_azimuth)%360)
+    #
+    #             # s1
+    #             if Ax < Bx and Ay < By:
+    #                 if my_azimuth < my_wind < (my_azimuth+180):
+    #                     windward = 1
+    #                 else:
+    #                     windward = 0
+    #             # s2
+    #             elif Ax > Bx and Ay < By:
+    #                 if (my_azimuth+180) < my_wind < (my_azimuth+360):
+    #                     windward = 1
+    #                 else:
+    #                     windward = 0
+    #             # s3 ! here I flip the wind angle for convenience, otherwise I have to deal with 360 degrees to 0
+    #             elif Ax > Bx and Ay > By:
+    #                 # if my_azimuth < my_wind < (my_azimuth+180):
+    #                 #     windward = 1
+    #                 if (my_azimuth+180) < ((my_wind+180)%360) < ((my_azimuth+360)%360):
+    #                     windward = 1
+    #                 else:
+    #                     windward = 0
+    #             # s4
+    #             elif Ax < Bx and Ay > By:
+    #                 if (my_azimuth+180) < ((my_wind+180)%360) < (my_azimuth+360):
+    #                     windward = 1
+    #                 else:
+    #                     windward = 0
+    #
+    #             exploded_targets.append({'id': ring['id'],
+    #                                      'segment_id': j,
+    #                                      # 'geometry':ring['geometry'],
+    #                                      'start': A,
+    #                                      'end': B,
+    #                                      'geometry': AB,
+    #                                      'height': ring['height'],
+    #                                      'facade_area': facade_area,
+    #                                      'azimuth': my_azimuth,
+    #                                      'windward': windward})
+    #
+    #             # if len(exploded_targets) > 37:
+    #             #     gdf = gpd.GeoDataFrame(exploded_targets[37:], crs='epsg:28992').set_index('id')
+    #             #     ax = gdf.plot(column='windward', k=10, cmap='viridis', legend=True)
+    #             #     plt.show()
+    #             #     print('banana')
+    #
+    #         # wkt_vertices = [ring['exterior'][12:-1]]
+    #         # coords = (i.split(', ') for i in wkt_vertices)
+    #         # big_coords.append(list(coords))
+    #         # print('banana')
+    #     # print('banana')
+    # gdf = gpd.GeoDataFrame(exploded_targets[8:36], crs='epsg:28992').set_index('id')
+    #
+    # ax = gdf.plot(column='windward', k=10, cmap='viridis', legend=True)
+    # # plt.savefig('temp_plot_2.png', dpi=1080)
+    #
+    # plt.show()
+    # print('banana')
+    #
+    # # df = pd.read_csv("http://weather.tudelft.nl/csv/Delfshaven.csv", header=None).tail(20)
+    # # whatsthis = df.to_string()
+    # # with open("weather.csv", mode=w):
+    #
+    # # for record in my_target:
+    #
+    # print('banana')
+
 except(Exception, psycopg2.Error) as error :
     print("Error while connecting to PostgreSQL", error)
 

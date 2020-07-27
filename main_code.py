@@ -1,3 +1,11 @@
+# -*- coding: utf-8 -*-
+"""
+Created on Fri Juli 24 10:47:28 2020
+
+@author: Wessel de Jongh
+Prediction of increased wind velocity zones in built environment
+"""
+
 import pandas as pd
 import geopandas as gpd
 import psycopg2
@@ -10,6 +18,9 @@ import descartes
 import numpy as np
 import csv
 import math
+import time
+from scipy.spatial import Voronoi, voronoi_plot_2d
+
 
 
 def plotSome_buildings(building_data, type, road_list):
@@ -106,6 +117,11 @@ def fad(road_data, plot=None):
 
 
 def get_roads():
+    """
+    This function queries the roads from the PostgreSQL database
+    :return: road listed dict
+    :rtype: list
+    """
     try:
         my_roadQuery = 'SELECT id, ST_asText(geom), stt_naam FROM wegvakken;'
         cursor.execute(my_roadQuery)
@@ -120,7 +136,7 @@ def get_roads():
         return road_list
 
     except(Exception, psycopg2.Error) as error:
-        print("Error while retrieving road data:", error)
+        print("Error during get_roads: ", error)
 
 def get_weather():
 
@@ -156,19 +172,37 @@ def get_weather():
     # print('banana')
 
 
-def windDirection(angle):
+def windDirection(point, angle):
     """Rewrites wind direction in degrees to linear function"""
+    Ax = float(point.x)
+    Ay = float(point.y)
 
     pass
 
 
-def line_function(geom):
+def line_function(A, B):
     """Get the function of the line to check direction, create a table for every line seg"""
+
+    Ax = float(A.x)
+    Ay = float(A.y)
+    Bx = float(B.x)
+    By = float(B.y)
+
+    # to calculate normal, first find f(x) from two points
+    # y = slope * x + b
+    slope = (Ay - By) / (Ax - Bx)
+    b = Ay - (slope * Ax)
+    # y_normal = (-1/slope)(float(AB.centroid.xy[0]) - Ax) + Ay
+    slope_normal = (-1 / slope)
+    b_normal = -(slope_normal * Ax) + Ay
 
     pass
 
 
 def azimuth(pointA, pointB):
+    """
+    Calculates the azimuth of two points
+    :return: """
     # A_x, A_y = pointA
     # B_x, B_y = pointB
     # angle = np.arctan(B_x - A_x, B_y - A_y)
@@ -177,27 +211,13 @@ def azimuth(pointA, pointB):
 
     return np.degrees(angle)
 
+def windward(wind_direction, plot=None, save=None):
+    """Find the windward and leeward sides of the buildings.
+    :return: list of dicts with windward sides and areas
+     :rtype: list"""
+    #TODO: rewrite input parameters for this function, building query
 
-try:
-    connection = psycopg2.connect(user="postgres",
-                                  password="0000000",
-                                  host="127.0.0.1",
-                                  port="5432",
-                                  database="thesisData")
-
-    cursor = connection.cursor()
-
-    # Print PostgreSQL Connection properties
-    print(connection.get_dsn_parameters(), "\n")
-
-    # tall_buildings(get_roads(), plot=True)
-    # fad(get_roads(), plot=True)
-    # get_weather()
-
-    my_wind = 345
-    actual_wind = (math.radians(my_wind) + math.pi) % (2*math.pi)
-    print("my wind: ", my_wind, "my actualy wind: ", math.degrees(actual_wind))
-
+    my_wind = wind_direction
     some_buildings = tall_buildings(get_roads())
     targets = []
     exterior_id = 0
@@ -229,21 +249,7 @@ try:
                 Ay = float(A.y)
                 Bx = float(B.x)
                 By = float(B.y)
-
-                # # to calculate normal, first find f(x) from two points
-                # # y = slope * x + b
-                # slope = (Ay - By)/(Ax - Bx)
-                # b = Ay - (slope*Ax)
-                # # y_normal = (-1/slope)(float(AB.centroid.xy[0]) - Ax) + Ay
-                # slope_normal = (-1/slope)
-                # b_normal = -(slope_normal*Ax) + Ay
-
-                # angle between wind direction and normal
-                my_radians = math.radians(my_wind)
-                circle = A.buffer(AB.length)
                 my_azimuth = azimuth(A, B)
-
-                attack = abs((math.degrees(actual_wind) - my_azimuth)%360)
 
                 # s1
                 if Ax < Bx and Ay < By:
@@ -251,47 +257,29 @@ try:
                         windward = 1
                     else:
                         windward = 0
+
                 # s2
                 elif Ax > Bx and Ay < By:
                     if (my_azimuth+180) < my_wind < (my_azimuth+360):
                         windward = 1
                     else:
                         windward = 0
-                # s3 ! here I flip the wind angle for convenience
+
+                # s3 ! here I flip the wind angle for convenience, otherwise I have to deal with 360 degrees to 0
                 elif Ax > Bx and Ay > By:
-                    # if my_azimuth < my_wind < (my_azimuth+180):
-                    #     windward = 1
                     if (my_azimuth+180) < ((my_wind+180)%360) < ((my_azimuth+360)%360):
                         windward = 1
                     else:
                         windward = 0
+
                 # s4
                 elif Ax < Bx and Ay > By:
-                    if my_azimuth < ((my_wind+180)%360) < (my_azimuth+180):
+                    if (my_azimuth+180) < ((my_wind+180)%360) < (my_azimuth+360):
                         windward = 1
                     else:
                         windward = 0
 
-
-                    # if my_azimuth < my_wind < ((my_azimuth+180)%360):
-                    #     windward = 1
-
-                # # b1
-                # if Ax < Bx:
-                #     if -90 < my_azimuth < 0:
-                #
-                #
-                #     pass
-                # if Ax > Bx:
-                #     pass
-                #
-                # if attack < 90:
-                #     windward = 1
-                # # elif attack < -180 and attack > -360:
-                # #     windward = 1
-                # else:
-                #     windward = 0
-
+                # append to output list
                 exploded_targets.append({'id': ring['id'],
                                          'segment_id': j,
                                          # 'geometry':ring['geometry'],
@@ -302,41 +290,125 @@ try:
                                          'facade_area': facade_area,
                                          'azimuth': my_azimuth,
                                          'windward': windward})
+        else:
+            print('geometry not oriented correctly')
+            continue
 
-                if len(exploded_targets) > 8:
-                    gdf = gpd.GeoDataFrame(exploded_targets[8:], crs='epsg:28992').set_index('id')
-                    ax = gdf.plot(column='windward', k=10, cmap='viridis', legend=True)
-                    plt.show()
-                    print('banana')
+                # if len(exploded_targets) > 37:
+                #     gdf = gpd.GeoDataFrame(exploded_targets[37:], crs='epsg:28992').set_index('id')
+                #     ax = gdf.plot(column='windward', k=10, cmap='viridis', legend=True)
+                #     plt.show()
+                #     print('banana')
+    if plot:
+        gdf = gpd.GeoDataFrame(exploded_targets, crs='epsg:28992').set_index('id')
+        ax = gdf.plot(column='windward', k=10, cmap='viridis', legend=True)
+    if save:
+        plt.savefig('temp_plot_2.png', dpi=1080)
 
-            # wkt_vertices = [ring['exterior'][12:-1]]
-            # coords = (i.split(', ') for i in wkt_vertices)
-            # big_coords.append(list(coords))
-            # print('banana')
-        # print('banana')
-    gdf = gpd.GeoDataFrame(exploded_targets[8:36], crs='epsg:28992').set_index('id')
+    if plot:
+        plt.show()
 
-    ax = gdf.plot(column='windward', k=10, cmap='viridis', legend=True)
-    plt.savefig('temp_plot.png', dpi=1080)
-
-    plt.show()
     print('banana')
+
+    return exploded_targets
+
+
+def urban_canyon_AR(buildings, roads):
+    """
+    Calculates the Aspect Ratio of given geometries and returns them in a listed dict.
+    :return: space between buildings, classified
+    :rtype: list
+    """
+
+
+
+    pass
+
+def create_fill(table_name, data):
+    """Creates a new PostgreSQL table and fill it with data (listed dict)"""
+
+    pass
+
+def connecting_roads():
+    """
+    This functions runs for every road segment to see if the next one has roughly the same direction.
+    :return: dataframe
+    """
+
+    my_roads = get_roads()
+    visualise = []
+
+    for line in my_roads:
+        visualise.append(line)
+        gdf = gpd.GeoDataFrame(visualise, crs='epsg:28992').set_index('id')
+        gdf.plot(color='G', linewidth=0.5)
+        plt.show()
+
+        start = Point(line['geometry'].xy[0][0], line['geometry'].xy[1][0])
+        end = Point(line['geometry'].xy[0][1], line['geometry'].xy[1][1])
+        my_azimuth = azimuth(start, end)
+
+        # buffer end points for other roads
+        # check all roads for azimuths, compare with my_azimuth
+        # if azimuth is the same with about 15 degrees, we might consider it to be joined?
+
+        gdf.buffer
+        print('banana')
+
+
+    pass
+
+def main():
+    # starttime = time.time()
+    """
+    Main logic of the program. Calls all function and get user inputs.
+    :return: 
+    """
+
+    #TODO: pick a building and surrounding buildings, including roads
+    # Or pick a street and find surrounding buildings and streets
+
+    # tall_buildings(get_roads(), plot=True)
+    # fad(get_roads(), plot=True)
+    # get_weather()
+    # windward(90)
+    # urban_canyon_AR()
+
+    connecting_roads()
+
+
+
 
     # df = pd.read_csv("http://weather.tudelft.nl/csv/Delfshaven.csv", header=None).tail(20)
     # whatsthis = df.to_string()
     # with open("weather.csv", mode=w):
 
-    # for record in my_target:
+    # endtime = time.time()
+    # duration = endtime - starttime
+    # print("Runtime: ", round(duration, 2), "s")
 
-    print('banana')
+    print('banana ending')
 
+if __name__ == '__main__':
+    try:
+        connection = psycopg2.connect(user="postgres",
+                                      password="0000000",
+                                      host="127.0.0.1",
+                                      port="5432",
+                                      database="thesisData")
 
-except(Exception, psycopg2.Error) as error:
-    print("Error while connecting to PostgreSQL", error)
+        cursor = connection.cursor()
+        # Print PostgreSQL Connection properties
+        print(connection.get_dsn_parameters(), "\n")
 
-finally:
-    # closing database connection.
-    if (connection):
-        cursor.close()
-        connection.close()
-        print("PostgreSQL connection is closed")
+        main()
+
+    except(Exception, psycopg2.Error) as error:
+        print("Error while connecting to PostgreSQL", error)
+
+    finally:
+        # closing database connection.
+        if (connection):
+            cursor.close()
+            connection.close()
+            print("PostgreSQL connection is closed")
