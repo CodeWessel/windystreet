@@ -12,16 +12,36 @@ import psycopg2
 from psycopg2 import Error
 import shapely
 import shapely.wkt
-from shapely.geometry import Point, LineString, LinearRing
+from shapely.geometry import Point, LineString, LinearRing, MultiPoint
+from shapely.ops import nearest_points
+from shapely import affinity
 import matplotlib.pyplot as plt
 import descartes
 import numpy as np
 import csv
 import math
 import time
-from scipy.spatial import Voronoi, voronoi_plot_2d
+from scipy.spatial import Voronoi, voronoi_plot_2d, cKDTree
+from shapely.ops import nearest_points
+import sqlalchemy as sal
+import geoalchemy2
+import copy
+from pyhull.voronoi import VoronoiTess
+# import pygeos
 
+def distance(p_1, p_2):
+    """
+    Distance between two given points.
+    """
+    return math.sqrt((p_2[0] - p_1[0])**2 + (p_2[1] - p_1[1])**2)
 
+def get_equidistant_points(p_1, p_2, parts):
+    """
+    Source:
+    https://stackoverflow.com/questions/47443037/equidistant-points-between-two-points-in-python
+    """
+    return list(zip(np.linspace(p_1[0], p_2[0], parts + 1),
+                    np.linspace(p_1[1], p_2[1], parts + 1)))
 
 def plotSome_buildings(building_data, type, road_list):
     # order of operations:
@@ -70,7 +90,7 @@ def building_density(building_data):
     return density_list
 
 
-def tall_buildings(road_list, plot=None):
+def tall_buildings(plot=None):
     """Select buildings based on threshold and based on buffer"""
     try:
         my_tallBuildingQuery = 'SELECT id, ST_AsText(geom), pand3d."roof-0.95"-pand3d."ground-0.30" as height ' \
@@ -85,6 +105,7 @@ def tall_buildings(road_list, plot=None):
             my_tallBuildings.append(my_tallRecord)
 
         if plot:
+            road_list = get_roads()
             plotSome_buildings(my_tallBuildings, "height", road_list)
 
         return my_tallBuildings
@@ -93,10 +114,27 @@ def tall_buildings(road_list, plot=None):
     except(Exception, psycopg2.Error) as error:
         print("Error while trying Tall Buildings: ", error)
 
+def all_buildingQuery():
+    try:
+        my_buildingQuery = 'SELECT id, ST_AsText(geom), (pand3d."roof-0.95"-pand3d."ground-0.30") as height, ST_Area(geom)/pand3d."roof-0.95" as density  ' \
+                           'FROM pand3d ' \
+                           'WHERE ST_Area(geom) > 0 and pand3d."roof-0.95" > 0;'
+        cursor.execute(my_buildingQuery)
+        record_building = cursor.fetchall()
+        building_list = []
+
+        for row in record_building:
+            my_buildingData = {'id': row[0], 'geometry': shapely.wkt.loads(row[1]), 'height': row[2]}
+            building_list.append(my_buildingData)
+
+        return my_buildingData
+
+    except(Exception, psycopg2.Error) as error:
+        print("Error while trying Tall Buildings: ", error)
 
 def fad(road_data, plot=None):
     try:
-        my_buildingQuery = 'SELECT id, ST_AsText(geom), (pand3d."roof-0.95"-pand3d."ground-0.30") as height, ST_Area(geom)/pand3d."roof-0.95" as density  ' \
+        my_buildingQuery = 'SELECT id, ST_AsText(geom), (pand3d."roof-0.95"-pand3d."ground-0.30") as height  ' \
                            'FROM pand3d ' \
                            'WHERE ST_Area(geom) > 0 and pand3d."roof-0.95" > 0;'
         cursor.execute(my_buildingQuery)
@@ -137,6 +175,36 @@ def get_roads():
 
     except(Exception, psycopg2.Error) as error:
         print("Error during get_roads: ", error)
+
+def get_bufferRoads():
+    try:
+        my_roadQuery = "SELECT *, ST_asText(ST_StartPoint(geom)) as start, " \
+                       "ST_AsText(ST_EndPoint(geom)) as end, " \
+                       "ST_Azimuth(ST_StartPoint(geom), ST_EndPoint(geom)) as azimuth, " \
+                       "ST_AsText(ST_buffer(ST_StartPoint(geom), 2, 'quad_segs=8')) as start_buffer, " \
+                       "ST_AsText(ST_buffer(ST_EndPoint(geom), 2, 'quad_segs=8')) as end_buffer, " \
+                       "ST_AsText(geom) as geometry " \
+                       "FROM wegvakken;"
+        cursor.execute(my_roadQuery)
+        record_road = cursor.fetchall()
+        road_list = []
+
+        # Put the query result in a list nested dict
+        for i in record_road:
+            my_roadData = {'id': i[0],
+                           'geometry': shapely.wkt.loads(i[35]),
+                           'start':shapely.wkt.loads(i[30]),
+                           'end':shapely.wkt.loads(i[31]),
+                           'azimuth': math.degrees(i[32]),
+                           'start_buffer':shapely.wkt.loads(i[33]),
+                           'end_buffer':shapely.wkt.loads(i[34])}
+            road_list.append(my_roadData)
+
+        return road_list
+
+    except(Exception, psycopg2.Error) as error:
+        print("Error during get_roads: ", error)
+
 
 def get_weather():
 
@@ -211,14 +279,14 @@ def azimuth(pointA, pointB):
 
     return np.degrees(angle)
 
-def windward(wind_direction, plot=None, save=None):
+def windward(buildings, wind_direction, plot=None, save=None):
     """Find the windward and leeward sides of the buildings.
     :return: list of dicts with windward sides and areas
      :rtype: list"""
     #TODO: rewrite input parameters for this function, building query
 
     my_wind = wind_direction
-    some_buildings = tall_buildings(get_roads())
+    some_buildings = buildings
     targets = []
     exterior_id = 0
     exploded_targets = []
@@ -267,18 +335,22 @@ def windward(wind_direction, plot=None, save=None):
 
                 # s3 ! here I flip the wind angle for convenience, otherwise I have to deal with 360 degrees to 0
                 elif Ax > Bx and Ay > By:
-                    if (my_azimuth+180) < ((my_wind+180)%360) < ((my_azimuth+360)%360):
+                    if ((my_azimuth+180)%360) < ((my_wind+180)%360) < ((my_azimuth+360)%360):
                         windward = 1
                     else:
                         windward = 0
 
-                # s4
+                # s4 !!! fix
                 elif Ax < Bx and Ay > By:
-                    if (my_azimuth+180) < ((my_wind+180)%360) < (my_azimuth+360):
+                    if ((my_azimuth+180)%360) < ((my_wind+180)%360) < ((my_azimuth+360)%360):
                         windward = 1
                     else:
                         windward = 0
-
+                elif Ax == Bx and Ay == By:
+                    print('faulty geometry: ', ring['id'], j)
+                    continue
+                else:
+                    print('j %d, Ax %d, Ay %d, Bx %d, By %d' % (j, Ax, Ay, Bx, By))
                 # append to output list
                 exploded_targets.append({'id': ring['id'],
                                          'segment_id': j,
@@ -302,6 +374,8 @@ def windward(wind_direction, plot=None, save=None):
     if plot:
         gdf = gpd.GeoDataFrame(exploded_targets, crs='epsg:28992').set_index('id')
         ax = gdf.plot(column='windward', k=10, cmap='viridis', legend=True)
+        ax.set_xlim(89000, 89300)
+        ax.set_ylim(436250, 436500)
     if save:
         plt.savefig('temp_plot_2.png', dpi=1080)
 
@@ -313,7 +387,7 @@ def windward(wind_direction, plot=None, save=None):
     return exploded_targets
 
 
-def urban_canyon_AR(buildings, roads):
+def urban_canyon_AR():
     """
     Calculates the Aspect Ratio of given geometries and returns them in a listed dict.
     :return: space between buildings, classified
@@ -327,36 +401,516 @@ def urban_canyon_AR(buildings, roads):
 def create_fill(table_name, data):
     """Creates a new PostgreSQL table and fill it with data (listed dict)"""
 
+
     pass
+
+def create_table(table_name):
+    commands = """
+    CREATE Table %s (
+    %s_id SERIAL PRIMARY KEY,
+    %s_name VARCHAR(255) NOT NULL
+    )
+    """ % (table_name, table_name, table_name)
+    print(commands)
+
+    try:
+
+        cursor.execute(commands)
+        cursor.close()
+        connection.commit()
+
+    except (Exception, psycopg2.DatabaseError) as error:
+        print(error)
+    finally:
+        # closing database connection
+        if (connection):
+            cursor.close()
+            connection.close()
+            print("PostgreSQL connection is closed")
 
 def connecting_roads():
     """
     This functions runs for every road segment to see if the next one has roughly the same direction.
     :return: dataframe
     """
+    my_bufferedRoads = get_bufferRoads()
+    gdf = gpd.GeoDataFrame(my_bufferedRoads, crs='espg:28992').set_index('id')
+    # gdf.to_sql('what', connection, if_exists='replace', index=False, dtype={'geom': Geometry('POINT', srid='28992')})
+
+
+
 
     my_roads = get_roads()
     visualise = []
-
-    for line in my_roads:
+    enriched_roads = []
+    id = 0
+    p_id = 00
+    data_points = []
+    data = []
+    my_id = []
+    for line in my_roads[:20]:
         visualise.append(line)
         gdf = gpd.GeoDataFrame(visualise, crs='epsg:28992').set_index('id')
-        gdf.plot(color='G', linewidth=0.5)
-        plt.show()
+        # gdf.plot(color='G', linewidth=0.5)
+        # plt.show()
 
         start = Point(line['geometry'].xy[0][0], line['geometry'].xy[1][0])
         end = Point(line['geometry'].xy[0][1], line['geometry'].xy[1][1])
         my_azimuth = azimuth(start, end)
 
-        # buffer end points for other roads
-        # check all roads for azimuths, compare with my_azimuth
-        # if azimuth is the same with about 15 degrees, we might consider it to be joined?
+        item_dict = {}
+        item_dict['id'] = id
+        item_dict['start'] = start
+        item_dict['start_id'] = p_id
+        item_dict['end'] = end
+        item_dict['end_id'] = p_id+1
+        item_dict['azimuth'] = my_azimuth
+        item_dict['line'] = line['geometry']
+        item_dict['joined'] = 0
+        my_id.append(p_id)
+        my_id.append(p_id+1)
 
-        gdf.buffer
-        print('banana')
+        enriched_roads.append(item_dict)
 
+        data.append([line['geometry'].xy[0][0], line['geometry'].xy[1][0], p_id])
+        data.append([line['geometry'].xy[0][1], line['geometry'].xy[1][1], p_id+1])
+        # data_points.append( p_id)
+        # data_points.append([end, )
+        start_point = {}
+        start_point['id'] = p_id
+        start_point['geometry'] = start
+        start_point['azimuth'] = my_azimuth
+        end_point = {}
+        end_point['id'] = p_id+1
+        end_point['geometry'] = end
+        end_point['azimuth'] = my_azimuth
+        data_points.append(start_point)
+        data_points.append(end_point)
+        ## buffer end points for other roads
+        ## check all roads for azimuths, compare with my_azimuth
+        ## if azimuth is the same with about 15 degrees, we might consider it to be joined?
+
+        ## Why buffer? why not just search for similar points? e.g Point(x±2, y±2) might work and faster
+
+        # gdf.geometry.buffer
+        # print('banana')
+
+        #TODO: enriched_roads, iterate through whole roads dataset for similar points. Check for similar azimuth
+        # if similar azimuth 'join' and remove from dataset by changing joined variable 0 to 1
+        id += 1
+        p_id = id * 10
+    # data_np = np.array(data)
+    # destinations = MultiPoint(data_points)
+
+    gdf2 = gpd.GeoDataFrame(enriched_roads, crs='epsg:28992').set_index('id')
+    gdf3 = gpd.GeoDataFrame(data_points, crs='epsg:28992').set_index('id')
+
+    dataPoint_buffers = gdf3.buffer(1)
+
+    what = dataPoint_buffers.within(gdf3)
+    for i, g in zip(my_id, dataPoint_buffers):
+        print(g)
+        print(i)
+        this = g.contain(data_points)
+
+    for bro in data_points:
+        maybe = dataPoint_buffers.contains(i['geometry'])
+        print('yes')
+    print('next banana')
+    # for seg in enriched_roads:
+    #     #first check start point
+    #     start_buffer = seg['start'].buffer(1)
+    #
+    #     for pt in data_points:
+    #         if seg['start_id'] == pt['id']:
+    #             continue
+    #
+    #
+    #     print('bana')
+    print('finished banana')
 
     pass
+
+def urbanCanyon(buildings):
+    """
+    1: query buildings inside buurt
+    2: discretize buildings and buurt polygons
+    3: do voronoi"""
+
+    try:
+        my_query = 'SELECT id, ST_asText(geom), jrstatcode ' \
+                   'FROM public.cbs_buurt_2019_gegeneraliseerd;'
+        cursor.execute(my_query)
+        record_buurt = cursor.fetchall()
+        buurt = []
+
+        for row in record_buurt:
+            feature = {'buurt_id':row[0],
+                       'geometry': shapely.wkt.loads(row[1]),
+                       'jrstatcode': row[2],
+                       'eq_pts': []}
+            buurt.append(feature)
+
+        gdf_buildings = gpd.GeoDataFrame(buildings, crs='epsg:28992').set_index('id')
+        gdf_buurt = gpd.GeoDataFrame(buurt, crs='epsg:28992').set_index('buurt_id')
+
+        eq_points_flat = []
+        eq_points_flat2 = []
+        full = {}
+
+        gdf_final = gpd.GeoDataFrame()
+
+        for index, area in gdf_buurt.iloc[1:].iterrows():
+            polygon = area.geometry[0]
+            selection = gdf_buildings.within(polygon)
+            subset = gdf_buildings[selection]  # True means buildings inside buurt, now
+            bld_indices = [bi for bi in subset.index if selection[bi]]
+            eq_pts_buildings_in_buurt = dict.fromkeys(bld_indices, [])
+            # now discretise subset and area polygon to perform voronoi
+
+            for index_subset, building in subset.iterrows():
+                building_pts = list(building.geometry.exterior.coords)
+
+                for j in range(len(building_pts) - 1):
+                    first = building_pts[j]
+                    second = building_pts[j + 1]
+                    dist = distance(first, second)
+
+                    eq_pts = get_equidistant_points(first, second, int(dist / 2))
+                    eq_pts_buildings_in_buurt[index_subset].extend(eq_pts)
+                    eq_points_flat.extend(eq_pts)
+                    # desired_list = [tuple(list(tup) + [index_subset]) for tup in eq_pts]
+                    # eq_points_flat2.extend(desired_list)
+
+            plt.scatter(*zip(*eq_points_flat), c='grey', s=4)
+            plt.show()
+
+            full[index] = eq_pts_buildings_in_buurt
+            bbox = []
+            # bbox2 = []
+            area_pts = list(polygon.exterior.coords)
+
+            for k in range(len(area_pts) - 1):
+                first = area_pts[k]
+                second = area_pts[k + 1]
+                dist = distance(first, second)
+                eq_area_pts = get_equidistant_points(first, second, int(dist / 2))
+                bbox.extend(eq_area_pts)
+                # desired_list2 = [tuple(list(tup) + [index_subset]) for tup in eq_area_pts]
+                # bbox2.extend(desired_list)
+
+            gdf_buurt.iloc[index]['eq_pts'] = bbox
+
+            plt.scatter(*zip(*bbox), c='grey', s=1)
+            plt.show()
+
+            # initiate Voronoi
+            voronoi_points = eq_points_flat + bbox
+            # voronoi_points2 = eq_points_flat2 + bbox2
+            try:
+                voronoi_schematic = VoronoiTess(voronoi_points)
+                # voronoi_scheme2 = VoronoiTess(voronoi_points2)
+            except:
+                print("Could not create Voronoi for this segment, id: ", index_subset)
+                continue
+
+            # voronoi_scipy = Voronoi(np.array(voronoi_points))
+
+            regions_to_coords = []
+            regions_to_polygons = []
+
+            # for region in voronoi_scipy.regions: #add to sub_polygons then to regions_to_polygons
+            #     sub_polygons = []
+            #     if len(region) < 1:
+            #         pass
+            #     else:
+            #         for v in region:
+            #             sub_polygons.append(tuple(voronoi_scipy.vertices[v]))
+            #
+            #         regions_to_coords.append(sub_polygons)
+
+            for region in voronoi_schematic.regions:  # add to sub_polygons then to regions_to_polygons
+                sub_polygons = []
+                if len(region) < 1:
+                    pass
+                else:
+                    for v in region:
+                        sub_polygons.append(tuple(voronoi_schematic.vertices[v]))
+
+                    regions_to_coords.append(sub_polygons)
+
+            for b, g in enumerate(regions_to_coords):
+                try:
+                    regions_to_polygons.append(shapely.geometry.Polygon(g))
+                except:
+                    print("error with this region: id = ", b)
+                    continue
+
+            gdf_polygons = gpd.GeoDataFrame(regions_to_polygons, columns=['geometry'], crs='epsg:28992')
+            gdf_polygons['related_building_id'] = pd.Series([[] for i in range(len(gdf_polygons))])
+            gdf_polygons['related_building_height'] = pd.Series([[] for i in range(len(gdf_polygons))])
+            gdf_polygons['related_edge_length'] = pd.Series([[] for i in range(len(gdf_polygons))])
+
+            filtered = []
+            for geom in regions_to_polygons:
+                if area.geometry.contains(geom):
+                    filtered.append(geom)
+
+            exploded = explode_polygons(filtered)
+
+            gdf_edge = gpd.GeoDataFrame(exploded, crs='epsg:28992')
+
+            #TODO: create spatial index on both datasets before computation
+            # find intersection between the building and the edge. 2x length = width of street?
+            building_index = gdf_buildings.sindex
+            edge_index = gdf_edge.sindex
+
+            for index_subset, building in subset.iterrows():
+                bounds = list(building.geometry.bounds)
+                environment = list(building_index.intersection(bounds)) #
+                candidates = list(edge_index.intersection(bounds))
+                possible_matches = gdf_edge.iloc[candidates]
+                immediate_environment = gdf_buildings.iloc[environment] #
+                final = possible_matches.loc[possible_matches.intersects(building.geometry.exterior)]
+
+                # diff = final.difference(building.geometry)
+                # alternative = final.difference(immediate_environment.geometry) #
+                # ax = alternative.plot() #
+
+                res_dif = gpd.overlay(final, immediate_environment, how='difference')
+
+                ###### only polygons where edge length is bigger than 1 coordinate distance
+                # is_true = list(res_dif.length.values >= np.ones_like(res_dif.length.values))
+                # it_list = zip(res_dif['polygon_id'], is_true)
+                # my_filteredList = [x[0] for x in zip(res_dif['polygon_id'], is_true) if x[1] == True]
+                # ax = gdf_polygons.iloc[my_filteredList].plot()
+
+                related_polygons = gdf_polygons.iloc[list(res_dif['polygon_id'])]
+
+                # ax = related_polygons.plot()
+                # ax = subset.loc[[index_subset], 'geometry'].plot(ax=ax, color='red')
+                # ax = res_dif.plot(ax=ax, linewidth=2, color='k')
+                #
+                # # plt.savefig('buildingIntersectingEdges_voronoi.png', dpi=300)
+                # plt.show()
+
+                #TODO:  - add subset building id and height to gdf_polygons
+                #       - add res_dif.length to gdf_polygon respective polygon. Polygon can have multiple edge lengths. Tuples?
+
+                for indx in related_polygons.index:
+                    gdf_polygons.iloc[indx]['related_building_id'].append(index_subset)
+                    gdf_polygons.iloc[indx]['related_building_height'].append(building['height'])
+
+
+                for line_id, part in res_dif.iterrows():
+                    gdf_polygons.iloc[part['polygon_id']]['related_edge_length'].append(part.geometry.length)
+
+
+                # test2 = gdf_polygons.nlargest(15, 'related_edge_length')
+                # gdf_polygons.merge(res_dif, on='polygon_id').query('polygon_id == polygon_id')
+                # # gdf_polygons['related_edge_length'] = res_dif.length
+                # # temp = gdf_polygons[5]
+                #
+                # for part in res_dif.iterrows():
+                #     whatis = gdf_polygons.loc[part['polygon_id']]
+                #     length = gdf_polygons.loc[part['polygon_id']]['related_edge_length'].append(part.geometry.length)
+                #     print('banana')
+
+                # gdf_polygons.loc[list(related_polygons.index)]['related_building_id'].append(index_subset)
+                # related_polygons['related_building_id'] = index_subset
+
+
+                # print('banana')
+
+
+            # gdf_regions.to_file("regions.shp")
+            # engine = sal.create_engine('postgresql://postgres:0000000@127.0.0.1:5432/thesisData')
+            # gdf_regions.to_postgis("testest", engine)
+            # print('banana')
+            #
+            # # ax = gdf_buildings.plot( column='height', k=10, cmap='viridis', legend=True)
+            # voronoi_plot_2d(voronoi_scipy, show_points=True, show_vertices=False,
+            #                       line_width=0.1, point_size=0.25)
+            # # plt.savefig('temp_plot_%s_voronoi.png' %index, dpi=540)
+            # plt.show()
+
+            gdf_polygons['average_length'] = gdf_polygons['related_edge_length'].apply(lambda x: np.mean(x) if (len(x) > 0) else None)
+            gdf_polygons['average_height'] = gdf_polygons['related_building_height'].apply(lambda x: np.mean(x) if (len(x) > 0) else None)
+            gdf_polygons['UC'] = gdf_polygons.apply(lambda uc: uc['average_height'] / uc['average_length'], axis=1)
+
+            gdf_without = gdf_polygons.dropna(subset=['UC'])
+            gdf_without = gdf_without.drop(columns=['related_edge_length', 'related_building_height', 'related_building_id'] )
+            gdf_without.to_file('gdf_without_dataframe_2.geojson', driver='GeoJSON')
+            ax = gdf_without.plot(column='UC', legend=True, cmap='Reds')
+            plt.show()
+            print('working???')
+        print('buurt_banana')
+
+    except(Exception, psycopg2.Error) as error:
+        print("Error during urbanCanyon: ", error)
+    finally:
+        # closing database connection
+        if (connection):
+            cursor.close()
+            connection.close()
+            print("PostgreSQL connection is closed")
+
+def query():
+
+    try:
+        my_BuildingQuery = 'SELECT id, ST_AsText(geom), pand3d."roof-0.95"-pand3d."ground-0.30" as height ' \
+                               'FROM pand3d WHERE pand3d."roof-0.95"-pand3d."ground-0.30" > 0;'
+
+        cursor.execute(my_BuildingQuery)
+        record_Building = cursor.fetchall()
+        my_Buildings = []
+
+        for tall in record_Building:
+            ratio = 0.65
+            width = (tall[2] / ratio)/2
+
+            my_Record = {'id': tall[0], 'geometry': shapely.wkt.loads(tall[1]), 'height': tall[2], 'buffer_width':width}
+            my_Buildings.append(my_Record)
+
+        # plotSome_buildings(my_Buildings, "height", get_roads())
+
+    except(Exception, psycopg2.Error) as error:
+        print("Error while trying query: ", error)
+
+    return my_Buildings
+
+def explode_polygons(list_of_polygons):
+    done = []
+
+    for n, polygon in enumerate(list_of_polygons):
+        coords = list(polygon.exterior.coords)
+
+        for i, pt in enumerate(coords):
+            if i == len(coords) - 1:
+                continue
+            else:
+                line = shapely.geometry.LineString([pt, coords[i + 1]])
+                my_dict = {'polygon_id': n}
+                my_dict['line_id'] = i
+                my_dict['geometry'] = line
+                done.append(my_dict)
+
+    return done
+
+def flows(wind_direction, percentile):
+    """
+    try to do voronoi using all buildings
+    :return: something
+    """
+
+    my_Buildings = query()
+    # my_Buildings = all_buildingQuery()
+    gdf = gpd.GeoDataFrame(my_Buildings, crs='espg:28992').set_index('id')
+
+    buffered = gdf.copy()
+    # buffered['geometry'] = buffered.apply(lambda x: x.geometry.buffer(x.bufferid), axis=1)
+    # ax = buffered.plot(column='height', k=10, cmap='viridis', legend=True)
+    # ax.set_xlim(91000, 92000)
+    # ax.set_ylim(436000, 438000)
+    # gpd.GeoDataFrame(my_Buildings, crs='epsg:28992').set_index('id').plot(ax=ax, color='G', linewidth=0.5)
+    # plt.show()
+
+    # step one: find all leeward sides
+    # step two: translate all geometry using winddirection vector, distance as height/ratio
+    # step three: merge polyline together using https://gis.stackexchange.com/questions/223447/weld-individual-line-segments-into-one-linestring-using-shapely
+    #
+    def merge(new):
+        print('merging building %d' % new[0]['id'])
+        if len(new) > 1:
+            create_new = [item['new_start'] for item in new]
+            recreate_old = [elem['start'] for elem in new]
+            recreate_old.reverse()
+            for i in recreate_old:
+                create_new.append(i)
+
+        # old_lines = [elem['geometry'] for elem in old if elem['id'] == old['id'] and elem['segment_id'] == old['id']]
+        # old_lines= [x for each in old for x in new if each['id'] == x['id'] and each['segment_id'] == x['segment_id']]
+
+        else:
+            create_new = []
+            create_new.append(new[0]['new_start'])
+            create_new.append(new[0]['new_end'])
+            create_new.append(new[0]['end'])
+            create_new.append(new[0]['start'])
+        # create_new.append(create_new[0])
+        # full = []
+        # for pt in create_new:
+        #     full.append(pt[0])
+        # full.append(pt[1])
+        # merged_line = shapely.ops.linemerge(multiline)
+        poly = shapely.geometry.Polygon([[p.x, p.y] for p in create_new])
+        entry = {}
+        entry['id'] = new[0]['id']
+        entry['geometry'] = poly
+        entry['height'] = new[0]['height']
+        what = []
+        what.append(entry)
+        # gdf = gpd.GeoDataFrame(what, crs='epsg:28992')
+        # ax = gdf.plot(column='id', k=10, cmap='viridis', legend=True, linewidth=0.5)
+
+        # gpd.GeoDataFrame(list(entry), crs='epsg:28992').set_index('id').plot(ax=ax, color='G', linewidth=0.5)
+        # plt.show()
+        # return the geometry, id,
+        return entry
+
+    facades = windward(my_Buildings, wind_direction, plot=True)
+    leeward_facades = [item for item in facades if item['windward'] == 0]
+    # try: https://stackoverflow.com/questions/2612802/list-changes-unexpectedly-after-assignment-how-do-i-clone-or-copy-it-to-prevent
+
+    for fac in leeward_facades:
+        distance = (fac['height'] * percentile)
+        dx = math.cos(math.radians(wind_direction)) * distance
+        dy = math.sin(math.radians(wind_direction)) * distance
+        fac['new_geometry'] = shapely.affinity.translate(fac['geometry'], dx, dy)
+        fac['new_start'] = shapely.affinity.translate(fac['start'], dx, dy)
+        fac['new_end'] = shapely.affinity.translate(fac['end'], dx, dy)
+
+    #step 3: join connecting lines
+    to_join = []
+    area = []
+    for shade in leeward_facades:
+        if len(to_join) == 0:
+            to_join.append(shade)
+            latest_id = shade['id']
+
+        elif shade['id'] == latest_id:
+            if shade['segment_id'] == to_join[-1]['segment_id']+1:
+                to_join.append(shade)
+
+            else:
+                # initiate to_join segments and empty to_join
+                area.append(merge(to_join))
+                to_join = []
+                to_join.append(shade)
+                print('new shade')
+
+
+        elif shade['id'] != latest_id:
+            print('new building')
+            area.append(merge(to_join))
+            to_join = []
+            to_join.append(shade)
+            latest_id = shade['id']
+
+    area.append(merge(to_join))
+            #initate to_join segments
+
+    gdf = gpd.GeoDataFrame(facades, crs='epsg:28992')
+    ax = gdf.plot(column='windward', k=2, cmap='viridis', legend=True, linewidth=0.5)
+    gpd.GeoDataFrame(area, crs='epsg:28992').set_index('id').plot(ax=ax, linewidth=0.5, color='k')
+    # ax.set_xlim(91500, 92100)
+    # ax.set_ylim(436000, 436500)
+    ax.set_xlim(89000, 89300)
+    ax.set_ylim(436250, 436500)
+    plt.show()
+    print('banana')
+
+
 
 def main():
     # starttime = time.time()
@@ -368,15 +922,25 @@ def main():
     #TODO: pick a building and surrounding buildings, including roads
     # Or pick a street and find surrounding buildings and streets
 
+    # usefull parameters:
+    wind_direction = 45
+    percentile = 0.65
+
     # tall_buildings(get_roads(), plot=True)
     # fad(get_roads(), plot=True)
     # get_weather()
     # windward(90)
     # urban_canyon_AR()
+    # mine = get_bufferRoads()
 
-    connecting_roads()
+    ##unfinshed:
+    # create_table('what')
+    # connecting_roads()
+    # flows(wind_direction, percentile)
 
 
+    urbanCanyon(query())
+    print('baana')
 
 
     # df = pd.read_csv("http://weather.tudelft.nl/csv/Delfshaven.csv", header=None).tail(20)
