@@ -16,10 +16,12 @@ import geopandas as gpd
 import psycopg2
 from psycopg2 import Error
 import matplotlib.pyplot as plt
+import matplotlib
 # import descartes
 import numpy as np
 import csv
 import math
+from math import radians
 import time
 from scipy.spatial import Voronoi, voronoi_plot_2d, cKDTree
 from shapely.ops import nearest_points
@@ -29,6 +31,7 @@ import geoalchemy2
 import copy
 from pyhull.voronoi import VoronoiTess
 import itertools
+from random import random
 # import pygeos
 
 def distance(p_1, p_2):
@@ -508,7 +511,7 @@ def connecting_roads():
 
     pass
 
-def consecutive_facades(buildings, voronoi):
+def consecutive_facades(buildings):
     """
 
     :param: simplified buildings
@@ -516,6 +519,136 @@ def consecutive_facades(buildings, voronoi):
     :return: super enriched voronoi with facade lengths
     :type: GeoDataframe
     """
+
+    # try:
+    my_query = 'SELECT simplified.id, ST_AsText(ST_ForcePolygonCCW(ST_CurveToLine(simplified.geom))), public.cbs_buurt_2019_gegeneraliseerd.id as buurt_id ' \
+    'FROM public.simplified, public.cbs_buurt_2019_gegeneraliseerd ' \
+    'WHERE ST_Intersects(ST_CurveToLine(simplified.geom), cbs_buurt_2019_gegeneraliseerd.geom); '
+
+
+    cursor.execute(my_query)
+    record_simplified = cursor.fetchall()
+
+    simplified = []
+
+    for row in record_simplified:
+        feature = {'simplified_id':row[0],
+                   'geometry':list(shapely.wkt.loads(row[1])),
+                   'buurt_id':row[2]
+                   }
+        simplified.append(feature)
+
+    done = []
+
+    for entry in simplified: #explode
+        for n, item in enumerate(entry['geometry']):
+            coords = list(item.exterior.coords)
+
+            for i, pt in enumerate(coords):
+                if i == len(coords) - 1:
+                    continue
+                else:
+                    line = shapely.geometry.LineString([pt, coords[i + 1]])
+                    my_dict = {'simplified_id': entry['simplified_id'],
+                               'sub_polygon_id': n,
+                               'line_id': i,
+                               'geometry': line,
+                               'azimuth': azimuth(Point(pt), Point(coords[i+1])),
+                               'group_line': None,
+                               'group_length': None}
+
+                    done.append(my_dict)
+
+    # # Forward looking, unneccesary
+    # n = 0
+    # for j, segment in enumerate(done):
+    #     for fw in range(4):
+    #         if done[j+fw]['simplified_id'] == segment['simplified_id']:
+    #             if (segment['azimuth']-15) <= done[j+fw]['azimuth'] <= (segment['azimuth']+15):
+    #                 print('same %d' % n)
+    #                 n += 1
+
+    max_backward = 3
+    max_azm_dif = radians(20)
+    stop = 0
+    for m, part in enumerate(done):
+        if part['line_id'] == 0:
+            ## visualising the buildings
+            if m != 0:
+                print('hold')
+                gdf = gpd.GeoDataFrame(done[stop:m])
+                colors = [(random(), random(), random()) for i in range(m-stop)]
+                new_map = matplotlib.colors.LinearSegmentedColormap.from_list('new_map', colors, N=(m+1-stop))
+                ax = gdf.plot(column='group_line', cmap=new_map, legend=True, linewidth=1.5)
+                for idx, row in gdf.iterrows():
+                    ax.annotate(text=row['group_line'], size=6,
+                                xy=(row.geometry.centroid.x, row.geometry.centroid.y))
+
+                plt.show()
+                print('wait after plot')
+
+            stop = m
+            part['group_line'] = part['line_id']
+            part['group_length'] = part['geometry'].length
+
+        elif part['line_id'] == 1: # I had to do this, because range(m-1, stop, -1) skips the 0 altogether
+            if (radians(done[m-1]['azimuth']) - max_azm_dif) < radians(part['azimuth']) < (
+                    radians(done[m-1]['azimuth']) + max_azm_dif):
+                part['group_line'] = done[m-1]['group_line']
+                part['group_length'] = part['geometry'].length + done[m-1]['group_length']
+                done[m-1]['group_length'] = part['group_length']
+                break  # because as soon as he found something, just continue with the next iteration
+
+            else:
+                part['group_line'] = m
+                part['group_length'] = part['geometry'].length
+
+
+        elif part['line_id'] < max_backward:
+            for l in range(m-1, stop ,-1):
+                print('m', m, 'l', l)
+                print(radians(part['azimuth']), ' ', radians(done[l]['azimuth']))
+                if (radians(done[l]['azimuth'])-max_azm_dif) < radians(part['azimuth']) < (radians(done[l]['azimuth'])+max_azm_dif):
+                    part['group_line'] = done[l]['group_line']
+                    part['group_length'] = part['geometry'].length + done[part['group_line']]['group_length']
+                    done[part['group_line']]['group_length'] = part['group_length']
+                    break # because as soon as he found something, just continue with the next iteration
+
+                else:
+                    part['group_line'] = part['line_id']
+                    part['group_length'] = part['geometry'].length
+
+        else:
+            for h in range(m-1, m-max_backward, -1):
+                print('m', m, 'h', h)
+                print(radians(part['azimuth']), ' ', radians(done[h]['azimuth']))
+
+                if (radians(done[h]['azimuth'])-max_azm_dif) < radians(part['azimuth']) < (radians(done[h]['azimuth'])+max_azm_dif):
+                    part['group_line'] = done[h]['group_line']
+                    part['group_length'] = part['geometry'].length + done[part['group_line']]['group_length']
+                    done[part['group_line']]['group_length'] = part['group_length']
+                    break # because as soon as he found something, just continue with the next iteration
+
+                else:
+                    part['group_line'] = part['line_id']
+                    part['group_length'] = part['geometry'].length
+
+
+
+    print('banana')
+
+    pass
+
+
+    # except(Exception, psycopg2.Error) as error:
+    #     print("Error during urbanCanyon: ", error)
+    # finally:
+    #     # closing database connection
+    #     if (connection):
+    #         cursor.close()
+    #         connection.close()
+    #         print("PostgreSQL connection is closed")
+
 
 def discretise_to_points(input):
 
@@ -878,10 +1011,12 @@ def main():
     # create_table('what')
     # connecting_roads()
 
-    start = time.time()
-    UC = urbanCanyon(all_buildingQuery())
-    elapsed_time_UC = (time.time() - start)
-    print(elapsed_time_UC)
+    consecutive_facades(all_buildingQuery())
+
+    # start = time.time()
+    # # UC = urbanCanyon(all_buildingQuery())
+    # elapsed_time_UC = (time.time() - start)
+    # print(elapsed_time_UC)
 
     # gdf_windward = gpd.GeoDataFrame(my_test_temp, crs='epsg:28992')
     # ax = gdf_windward.plot(column='windward', k=2, cmap='viridis', legend=True, linewidth=0.5)
