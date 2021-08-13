@@ -17,6 +17,7 @@ import psycopg2
 from psycopg2 import Error
 import matplotlib.pyplot as plt
 import matplotlib
+import matplotlib.gridspec as gridspec
 # import descartes
 import numpy as np
 import csv
@@ -100,7 +101,7 @@ def tall_buildings(plot=None):
     try:
         my_tallBuildingQuery = 'SELECT id, ST_AsText(geom), pand3d."roof-0.95"-pand3d."ground-0.30" as height ' \
                                'FROM pand3d ' \
-                               'WHERE pand3d."roof-0.95"-pand3d."ground-0.30" > 60;'
+                               # 'WHERE pand3d."roof-0.95"-pand3d."ground-0.30" > 60;'
         cursor.execute(my_tallBuildingQuery)
         record_tallBuilding = cursor.fetchall()
         my_tallBuildings = []
@@ -112,6 +113,8 @@ def tall_buildings(plot=None):
         if plot:
             road_list = get_roads()
             plotSome_buildings(my_tallBuildings, "height", road_list)
+
+
 
         return my_tallBuildings
 
@@ -511,7 +514,7 @@ def connecting_roads():
 
     pass
 
-def consecutive_facades(buildings):
+def consecutive_facades(buildings, wind_direction):
     """
 
     :param: simplified buildings
@@ -534,31 +537,65 @@ def consecutive_facades(buildings):
     for row in record_simplified:
         feature = {'simplified_id':row[0],
                    'geometry':list(shapely.wkt.loads(row[1])),
+                   # 'geometry': shapely.wkt.loads(row[1]),
                    'buurt_id':row[2]
                    }
         simplified.append(feature)
 
     done = []
-
+    my_id = 0
     for entry in simplified: #explode
         for n, item in enumerate(entry['geometry']):
             coords = list(item.exterior.coords)
 
+            #check for interiors
+            interior_coords = []
+            for interior in item.interiors:
+                interior_coords += interior.coords[:]
+            interior_coords.reverse()
+            if len(interior_coords) > 0:
+                for it, ptn in enumerate(interior_coords):
+                    if it == len(interior_coords) - 1:
+                        continue
+                    else:
+                        line = shapely.geometry.LineString([ptn, interior_coords[it + 1]])
+                        my_dict = {'id': my_id,
+                                   'simplified_id': entry['simplified_id'],
+                                   'sub_polygon_id': n,
+                                   'interior': 1,
+                                   'line_id': it,
+                                   'geometry': line,
+                                   'azimuth': azimuth(Point(ptn), Point(interior_coords[it + 1])),
+                                   'group_line': None,
+                                   'group_length': None}
+                        my_id += 1
+                        done.append(my_dict)
+            # gdf = gpd.GeoDataFrame(done, crs='epsg:28992').set_index('id', drop=False)
+            # ax = gdf.plot(column='id', legend=True, linewidth=1.5)
+            # for idx, row in gdf.iterrows():
+            #     ax.annotate(text=row['id'], size=6,
+            #                 xy=(row.geometry.centroid.x, row.geometry.centroid.y))
+            # plt.show()
+            # print('hodl')
             for i, pt in enumerate(coords):
                 if i == len(coords) - 1:
                     continue
                 else:
                     line = shapely.geometry.LineString([pt, coords[i + 1]])
-                    my_dict = {'simplified_id': entry['simplified_id'],
+                    my_dict = {'id': my_id,
+                               'simplified_id': entry['simplified_id'],
                                'sub_polygon_id': n,
+                               'interior': 0,
                                'line_id': i,
                                'geometry': line,
                                'azimuth': azimuth(Point(pt), Point(coords[i+1])),
                                'group_line': None,
                                'group_length': None}
-
+                    my_id += 1
                     done.append(my_dict)
-
+    print('Starting windward...')
+    for wdir in wind_direction:
+        done = windward_after(done, wdir)
     # # Forward looking, unneccesary
     # n = 0
     # for j, segment in enumerate(done):
@@ -567,28 +604,29 @@ def consecutive_facades(buildings):
     #             if (segment['azimuth']-15) <= done[j+fw]['azimuth'] <= (segment['azimuth']+15):
     #                 print('same %d' % n)
     #                 n += 1
-
+    print('Done windward...')
+    print(done[0])
     max_backward = 3
     max_azm_dif = radians(20)
     stop = 0
     for m, part in enumerate(done):
         if part['line_id'] == 0:
+            # print('new polygon ', m)
             ## visualising the buildings
-            if m != 0:
-                print('hold')
-                gdf = gpd.GeoDataFrame(done[stop:m])
-                colors = [(random(), random(), random()) for i in range(m-stop)]
-                new_map = matplotlib.colors.LinearSegmentedColormap.from_list('new_map', colors, N=(m+1-stop))
-                ax = gdf.plot(column='group_line', cmap=new_map, legend=True, linewidth=1.5)
-                for idx, row in gdf.iterrows():
-                    ax.annotate(text=row['group_line'], size=6,
-                                xy=(row.geometry.centroid.x, row.geometry.centroid.y))
-
-                plt.show()
-                print('wait after plot')
+            # if m != 0:
+            #     gdf = gpd.GeoDataFrame(done[stop:m])
+            #     colors = [(random(), random(), random()) for i in range(m-stop)]
+            #     new_map = matplotlib.colors.LinearSegmentedColormap.from_list('new_map', colors, N=(m+1-stop))
+            #     ax = gdf.plot(column='group_line', cmap=new_map, legend=True, linewidth=1.5)
+            #     for idx, row in gdf.iterrows():
+            #         ax.annotate(text=row['group_line'], size=6,
+            #                     xy=(row.geometry.centroid.x, row.geometry.centroid.y))
+            #
+            #     plt.show()
+            #     print('HODL')
 
             stop = m
-            part['group_line'] = part['line_id']
+            part['group_line'] = m
             part['group_length'] = part['geometry'].length
 
         elif part['line_id'] == 1: # I had to do this, because range(m-1, stop, -1) skips the 0 altogether
@@ -597,7 +635,6 @@ def consecutive_facades(buildings):
                 part['group_line'] = done[m-1]['group_line']
                 part['group_length'] = part['geometry'].length + done[m-1]['group_length']
                 done[m-1]['group_length'] = part['group_length']
-                break  # because as soon as he found something, just continue with the next iteration
 
             else:
                 part['group_line'] = m
@@ -606,8 +643,8 @@ def consecutive_facades(buildings):
 
         elif part['line_id'] < max_backward:
             for l in range(m-1, stop ,-1):
-                print('m', m, 'l', l)
-                print(radians(part['azimuth']), ' ', radians(done[l]['azimuth']))
+                # print('m', m, 'l', l)
+                # print(radians(part['azimuth']), ' ', radians(done[l]['azimuth']))
                 if (radians(done[l]['azimuth'])-max_azm_dif) < radians(part['azimuth']) < (radians(done[l]['azimuth'])+max_azm_dif):
                     part['group_line'] = done[l]['group_line']
                     part['group_length'] = part['geometry'].length + done[part['group_line']]['group_length']
@@ -615,13 +652,13 @@ def consecutive_facades(buildings):
                     break # because as soon as he found something, just continue with the next iteration
 
                 else:
-                    part['group_line'] = part['line_id']
+                    part['group_line'] = m
                     part['group_length'] = part['geometry'].length
 
-        else:
+        elif part['line_id'] >= max_backward:
             for h in range(m-1, m-max_backward, -1):
-                print('m', m, 'h', h)
-                print(radians(part['azimuth']), ' ', radians(done[h]['azimuth']))
+                # print('m', m, 'h', h)
+                # print(radians(part['azimuth']), ' ', radians(done[h]['azimuth']))
 
                 if (radians(done[h]['azimuth'])-max_azm_dif) < radians(part['azimuth']) < (radians(done[h]['azimuth'])+max_azm_dif):
                     part['group_line'] = done[h]['group_line']
@@ -630,14 +667,21 @@ def consecutive_facades(buildings):
                     break # because as soon as he found something, just continue with the next iteration
 
                 else:
-                    part['group_line'] = part['line_id']
+                    part['group_line'] = m
                     part['group_length'] = part['geometry'].length
 
+    for x, entry in enumerate(done): # re-assign length so everythin is consistent
+        if entry['group_line'] == x:
+            pass
+        else:
+            entry['group_length'] = done[entry['group_line']]['group_length']
 
+    for a in done:
+        del a['simplified_id'], a['sub_polygon_id'], a['interior'], a['line_id'], a['group_line']
 
-    print('banana')
+    print(done[0])
 
-    pass
+    write_to_db(done)
 
 
     # except(Exception, psycopg2.Error) as error:
@@ -648,6 +692,139 @@ def consecutive_facades(buildings):
     #         cursor.close()
     #         connection.close()
     #         print("PostgreSQL connection is closed")
+
+def write_to_db(done):
+    print('Started writing consecutive facade to postgis...')
+    db_connection_url = "postgres://postgres:0000000@127.0.0.1:5432/thesisData"
+    engine = create_engine(db_connection_url)
+    print('Creating GeoDataFrame...')
+    gdf_done = gpd.GeoDataFrame(done, crs='epsg:28992')
+    print('Now writing...')
+    gdf_done.to_postgis(name='consecutivefacadewind_final_bottom', con=engine, if_exists='replace')
+    print('Writen...')
+
+def windward_after(data, wind_direction):
+    for i in data:
+        my_wind = wind_direction
+        line = i['geometry']
+        A, B = list(zip(list(line.xy[0]), list(line.xy[1])))
+        A = Point(list(A))
+        B = Point(list(B))
+        impact = 0
+        if i['interior'] == 0:
+
+            my_azimuth = azimuth(A, B)
+            Ax = float(A.x)
+            Ay = float(A.y)
+            Bx = float(B.x)
+            By = float(B.y)
+
+            # s1
+            if Ax <= Bx and Ay < By:
+                if my_azimuth < my_wind < (my_azimuth + 180):
+                    windward = 1
+                else:
+                    windward = 0
+
+            # s2
+            elif Ax > Bx and Ay <= By:
+                if (my_azimuth) < my_wind < (my_azimuth + 180):
+                    windward = 1
+                else:
+                    windward = 0
+
+            # s3 ! here I flip the wind angle for convenience, otherwise I have to deal with 360 degrees to 0
+            elif Ax >= Bx and Ay > By:
+                if ((my_azimuth + 180) % 360) < ((my_wind + 180) % 360) < ((my_azimuth + 360) % 360):
+                    windward = 1
+                else:
+                    windward = 0
+
+            # s4
+            elif Ax < Bx and Ay >= By:
+                if ((my_azimuth + 180) % 360) < ((my_wind + 180) % 360) < ((my_azimuth + 360) % 360):
+                    windward = 1
+                else:
+                    windward = 0
+            elif Ax == Bx and Ay == By:
+                print('faulty geometry: ', ring['id'], j)
+                continue
+            else:
+                print('j %d, Ax %d, Ay %d, Bx %d, By %d' % (j, Ax, Ay, Bx, By))
+            # append to output list
+            i['windward_%s' % my_wind] =  windward
+
+        elif i['interior'] == 1:
+            Am = B
+            Bm = A
+            my_azimuth = azimuth(Am, Bm)
+            Ax = float(Am.x)
+            Ay = float(Am.y)
+            Bx = float(Bm.x)
+            By = float(Bm.y)
+
+
+
+            # s1
+            if Ax <= Bx and Ay < By:
+                if my_azimuth < my_wind < (my_azimuth + 180):
+                    windward = 1
+
+                else:
+                    windward = 0
+
+            # s2
+            elif Ax > Bx and Ay <= By:
+                if (my_azimuth) < my_wind < (my_azimuth + 180):
+                    windward = 1
+
+                else:
+                    windward = 0
+
+            # s3 ! here I flip the wind angle for convenience, otherwise I have to deal with 360 degrees to 0
+            elif Ax >= Bx and Ay > By:
+                if ((my_azimuth + 180) % 360) < ((my_wind + 180) % 360) < ((my_azimuth + 360) % 360):
+                    windward = 1
+                else:
+                    windward = 0
+
+            # s4
+            elif Ax < Bx and Ay >= By:
+                if ((my_azimuth + 180) % 360) < ((my_wind + 180) % 360) < ((my_azimuth + 360) % 360):
+                    windward = 1
+                else:
+                    windward = 0
+            elif Ax == Bx and Ay == By:
+                print('faulty geometry: ', ring['id'], j)
+                continue
+            else:
+                print('j %d, Ax %d, Ay %d, Bx %d, By %d' % (j, Ax, Ay, Bx, By))
+            # append to output list
+            i['windward_%s' % my_wind]= windward
+
+        # if my_azimuth >= 0:
+        #     impact = my_azimuth - ((wind_direction + 180) % 360)
+        # elif my_azimuth < 0:
+        #     impact = my_azimuth - (wind_direction - 360)
+
+        if wind_direction > 180:
+            my_wind = wind_direction - 360
+
+            impact = abs(my_wind - my_azimuth)
+        else:
+            impact = abs(my_wind - my_azimuth)
+
+
+        if impact > 90:
+            impact = abs(impact-180)
+
+        if impact > 90:
+            impact = abs(impact-180)
+
+
+        i['impact_%s' % wind_direction]= round(impact, 2)
+
+    return data
 
 
 def discretise_to_points(input):
@@ -694,11 +871,11 @@ def urbanCanyon(buildings):
         gdf_buildings = gpd.GeoDataFrame(buildings, crs='epsg:28992').set_index('id')
         building_index = gdf_buildings.sindex
         gdf_buurt = gpd.GeoDataFrame(buurt, crs='epsg:28992').set_index('buurt_id')
-
+        gdf_buurt['eq_pts'] = np.nan
         it = 0
         full = {}
 
-        for index, area in gdf_buurt.iloc[:].iterrows(): # Loop to select buildings inside Buurt polygon
+        for index, area in gdf_buurt.iloc[22:].iterrows(): # Loop to select buildings inside Buurt polygon
             polygon = area.geometry[0]
             selection = gdf_buildings.within(polygon)
             subset = gdf_buildings[selection]  # True means buildings inside buurt, now
@@ -733,15 +910,24 @@ def urbanCanyon(buildings):
                 eq_area_pts = get_equidistant_points(first, second, int(dist / 2))
                 bbox.extend(eq_area_pts)
 
-            gdf_buurt.iloc[index]['eq_pts'] = bbox # Wrong assignment, but works
+            # extra_bbox = []
+            # extra_area_pts = list(polygon.envelope.exterior.coords)
+            # for k in range(len(extra_area_pts) - 1): # Discretize the Buurt polygon into points for voronoi
+            #     first = extra_area_pts[k]
+            #     second = extra_area_pts[k + 1]
+            #     dist = distance(first, second)
+            #     eq_extra_area_pts = get_equidistant_points(first, second, int(dist / 2))
+            #     extra_bbox.extend(eq_extra_area_pts)
 
             plt.scatter(*zip(*bbox), c='grey', s=1)
             plt.show()
+            # plt.scatter(*zip(*extra_bbox), c='grey', s=1)
+            # plt.show()
 
             # initiate Voronoi
             voronoi_points = eq_points_flat + bbox
             try:
-                voronoi_schematic = VoronoiTess(voronoi_points)
+                voronoi_schematic = VoronoiTess(voronoi_points, add_bounding_box=True)
             except:
                 print("Could not create Voronoi for this segment, id: ", index_subset)
                 continue
@@ -751,21 +937,39 @@ def urbanCanyon(buildings):
 
             for region in voronoi_schematic.regions:  # add to sub_polygons then to regions_to_polygons
                 sub_polygons = []
+
                 if len(region) < 1:
                     pass
                 else:
                     for v in region:
-                        sub_polygons.append(tuple(voronoi_schematic.vertices[v]))
-
+                        to_check_for_inf = tuple(voronoi_schematic.vertices[v])
+                        if to_check_for_inf[0] == -10.101 or to_check_for_inf[1] == -10.101:
+                            continue
+                        else:
+                            sub_polygons.append(tuple(voronoi_schematic.vertices[v]))
                     regions_to_coords.append(sub_polygons)
+
+                # if len(region) < 1:
+                #     pass
+                # else:
+                #     for v in region:
+                #         sub_polygons.append(tuple(voronoi_schematic.vertices[v]))
+                #
+                #     regions_to_coords.append(sub_polygons)
 
             for b, g in enumerate(regions_to_coords):
                 try:
                     # g.append(g[0])
-                    regions_to_polygons.append(shapely.geometry.Polygon(g))
+                    if len(g) > 0:
+                        regions_to_polygons.append(shapely.geometry.Polygon(g))
                 except:
                     print("error with this region: id = ", b)
                     continue
+
+            filtered = []
+            for geom in regions_to_polygons: # Filter to check if entire polygon is inside the Buurt polygon
+                # if area.geometry.contains(geom.centroid):
+                filtered.append(geom)
 
             # Create new dataframe to fill with list values later
             gdf_polygons = gpd.GeoDataFrame(regions_to_polygons, columns=['geometry'], crs='epsg:28992')
@@ -773,16 +977,22 @@ def urbanCanyon(buildings):
             gdf_polygons['related_building_height'] = pd.Series([[] for i in range(len(gdf_polygons))])
             gdf_polygons['related_edge_length'] = pd.Series([[] for i in range(len(gdf_polygons))])
 
-            filtered = []
-            for geom in regions_to_polygons: # Filter to check if entire polygon is inside the Buurt polygon
-                if area.geometry.contains(geom):
-                    filtered.append(geom)
+
 
             exploded = explode_polygons(filtered)
             gdf_edge = gpd.GeoDataFrame(exploded, crs='epsg:28992')
 
+            # works but not satisfactory
+
+            gdf_test = gpd.GeoDataFrame(([{'id': index, 'geometry' : Polygon(list(polygon.exterior.coords))}]))
+            gdf_test = gdf_test.set_crs(epsg=28992, inplace=True)
+            gdf_polygons = gpd.overlay(gdf_polygons, gdf_test, how='intersection', make_valid=True)
+            gdf_polygons = gdf_polygons[~gdf_polygons.is_empty]
+            gdf_edge = gpd.overlay(gdf_edge, gdf_test, how='intersection', make_valid=True)
+
+
             # Create spatial index on edge
-            # building_index = gdf_buildings.sindex
+            building_index = gdf_buildings.sindex
             edge_index = gdf_edge.sindex
 
             print('Started with determining cell lengths')
@@ -800,8 +1010,10 @@ def urbanCanyon(buildings):
                 # alternative = final.difference(immediate_environment.geometry) #
                 # ax = alternative.plot() #
 
+
                 res_dif = gpd.overlay(final, immediate_environment, how='difference') # Find only street part of the edge
                 related_polygons = gdf_polygons.iloc[list(res_dif['polygon_id'])]
+
 
                 for indx in related_polygons.index: # combine the building data with the voronoi data
                     gdf_polygons.iloc[indx]['related_building_id'].append(index_subset)
@@ -817,23 +1029,26 @@ def urbanCanyon(buildings):
             print('Calculating Urban Canyon H/W ratio')
 
             # Calculate the Urban Canyon ratio
-            gdf_polygons['average_length'] = gdf_polygons['related_edge_length'].apply(lambda x: np.mean(x) if (len(x) > 0) else None)
-            gdf_polygons['average_height'] = gdf_polygons['related_building_height'].apply(lambda x: np.mean(x) if (len(x) > 0) else None)
+            gdf_polygons['average_length'] = gdf_polygons['related_edge_length'].apply(lambda x: np.mean(x) if (len(x) > 0) else np.nan)
+            gdf_polygons['average_height'] = gdf_polygons['related_building_height'].apply(lambda x: np.mean(x) if (len(x) > 0) else np.nan)
             gdf_polygons['UC'] = gdf_polygons.apply(lambda uc: uc['average_height'] / uc['average_length'], axis=1)
 
             # Unneccesary code:
-            gdf_polygons = gdf_polygons.dropna()
-            gdf_polygons = gdf_polygons.drop(columns=['related_edge_length', 'related_building_height', 'related_building_id'] )
+            # gdf_polygons = gdf_polygons.dropna()
+            # gdf_polygons = gdf_polygons.drop(columns=['related_edge_length', 'related_building_height', 'related_building_id'] )
 
+            gdf_polygons.plot()
+            plt.show()
 
             gdf_polygons['buurt'] = index
             # gdf_final = gdf_final.append(gdf_polygons)
+            print('banana')
             if it == 0:
-                gdf_polygons.to_postgis(name='urbanCanyon_table', con=engine, if_exists='replace')
+                gdf_polygons.to_postgis(name='urbancanyon_table_hodl', con=engine, if_exists='replace')
                 it =+ 1
                 print('Table replaced')
             else:
-                gdf_polygons.to_postgis(name='urbanCanyon_table', con=engine, if_exists='append')
+                gdf_polygons.to_postgis(name='urbancanyon_table_hodl', con=engine, if_exists='append')
                 print('Table appended')
 
             # gdf_polygons.to_file('final_UC.geojson', driver='GeoJSON', if_exists='append')
@@ -859,7 +1074,6 @@ def urbanCanyon(buildings):
             cursor.close()
             connection.close()
             print("PostgreSQL connection is closed")
-
 
 def query():
 
@@ -984,6 +1198,209 @@ def flows(buildings, wind_direction, percentile):
 
     return shadow
 
+def building_stats():
+    my_buildings = all_buildingQuery()
+    gdf_building = gpd.GeoDataFrame(my_buildings)
+    fs=14
+    h = gdf_building['height']
+    # ax1 = h.plot.kde(bw_method=0.3)
+    # ax1 = np.sqrt(h).plot.hist(bins=24)
+    # ax1.set_xlabel('Height [m]', fontsize=fs)
+    # plt.show()
+    #
+    # ax2 = np.log10(h).plot.hist(bins=24)
+    # ax2.set_title('Logarithmic (log 10)')
+    #
+
+    # ax3 = np.sqrt(h).plot.kde(bw_method=0.3)
+    fig = plt.figure(constrained_layout=True)
+    spec = gridspec.GridSpec(ncols=2, nrows=2, figure=fig)
+    # ax3 = fig.add_subplot(spec[0,0])
+    # ax3 = h.plot.kde(bw_method=0.3)
+    #
+    #
+    # ax3.set_title('Square root')
+
+    ax4 = fig.add_subplot(spec[0,:])
+    ax4 = h.plot.hist(bins=256, color='red', edgecolor='k', alpha=0.65)
+    ax4.set_title('Building height histogram')
+    ax4.set_xlabel('Height [m]', fontsize=fs-2)
+    ax4.set_ylabel('Frequency', fontsize=fs-2)
+    ax4 = plt.axvline(h.mean(), color='c', linestyle='dashed', linewidth=1)
+    ax4 = plt.annotate('mean: %s' % round(h.mean(),1), xy=(h.mean(), plt.ylim()[1]*0.9), fontsize=8, horizontalalignment='r', rotation=20, color='c')
+    ax4 = plt.axvline(h.median(), color='firebrick', linestyle='dashed', linewidth=1)
+    ax4 = plt.annotate('median: %s' % round(h.median(),1), xy=(h.median(), plt.ylim()[1]*0.75), fontsize=8, horizontalalignment='r', rotation=20, color='firebrick')
+
+    ax5 = fig.add_subplot(spec[1,:])
+    ax5.set_title('Boxplot of building height', fontsize=fs)
+    ax5.set_xlabel('Height [m]', fontsize=fs-2)
+    flierprops = dict(marker='o', markersize=4)
+    medianprops = dict(linestyle='-', linewidth=2.5, color='firebrick')
+    ax5 = plt.boxplot(h, showfliers=True, vert=False, flierprops=flierprops, medianprops=medianprops)
+    ax5 = plt.plot([23,23],[0,1], '--', marker='o', markevery=[1], ms=3)
+    # ax5 = plt.xticks(list(plt.xticks()[0]) + [23])
+    ax5 = plt.annotate('$height=23$', xy=(23,0.70), fontsize=8, horizontalalignment='r', rotation=20, color='b')
+    # fig.savefig('pdf_hist_box.pdf', bbox_inches='tight')
+    plt.show()
+    print('hodl')
+
+def roughness():
+    # step 1: query
+    # step 2: put in pandas and do; df['Max'] = df[['Communications','Business']].idxmax(axis=1)
+    # step 3: dict with layer names and roughness length values
+    # step 4: return to DB
+    sql = "SELECT * FROM public.overlap_analysis"
+    db_connection_url = "postgres://postgres:0000000@127.0.0.1:5432/thesisData"
+    engine = create_engine(db_connection_url)
+    gdf = gpd.read_postgis(sql, con=engine)
+    column_names = ['bgt_area_gras_pc', 'bgt_area_plants_pc', 'bgt_area_shrub_pc', 'bgt_area_tree_pc', 'bgt_area_obg_erf_pc',
+                    'bgt_area_obg_gesloten_pc', 'bgt_area_obg_half_pc', 'bgt_area_obg_onverhard_pc', 'bgt_area_obg_open_pc', 'bgt_area_wgd_gesloten_pc',
+                    'bgt_area_wgd_half_pc', 'bgt_area_wgd_open_pc', 'bgt_waterdeel_pc']
+    z0_values = {'bgt_area_gras_pc': 0.03, 'bgt_area_plants_pc': 0.1, 'bgt_area_shrub_pc': 0.25, 'bgt_area_tree_pc': 0.5,
+                 'bgt_area_obg_erf_pc': 1, 'bgt_area_obg_gesloten_pc': 0.005, 'bgt_area_obg_half_pc': 0.005, 'bgt_area_obg_onverhard_pc': 0.03,
+                 'bgt_area_obg_open_pc': 0.005, 'bgt_area_wgd_gesloten_pc': 0.005, 'bgt_area_wgd_half_pc': 0.005, 'bgt_area_wgd_open_pc': 0.005,
+                 'bgt_waterdeel_pc': 0.0002}
+    gdf['max'] = gdf[column_names].idxmax(axis=1)
+    gdf['z0'] = gdf['max'].replace(to_replace=z0_values)
+    selection = gdf[(gdf[column_names] == 0).all(1)]
+    gdf['z0'].iloc[selection.index] = np.nan
+
+
+    print('to_postgis')
+    gdf.to_postgis(name='incl_roughness', con=engine, if_exists='replace')
+    print('hodl ape')
+
+
+
+def calc_score(gdf):
+    wdir_list = [0, 30, 60, 90, 120, 150, 180, 210, 240, 270, 300, 330]
+    gdf['average_height_neg'] = gdf['average_height'] * -1
+    gdf['LH_neg'] = gdf['LH'] * -1
+    thresholds_5 = {'average_height_neg':[-23, -15.7, -13.34, -10.3, -8.6],
+                   'UC':[0.05, 0.4, 0.65, 1, 2],
+                   'impact':[18, 36, 54, 72, 90],
+                   # 'impact_180':[18, 36, 54, 72, 90],
+                   # 'impact_250': [18, 36, 54, 72, 90],
+                   # 'impact_290': [18, 36, 54, 72, 90],
+                   }
+    
+    thresholds_3 = {'WL':[0.07, 0.56, 3.20],
+                    # 'LH':[1.42, 3.69, 7.46]
+                    'LH_neg':[-7.46, -3.69, -1.42]
+                    }
+
+    thresholds_2 = {'windward':[0,1],
+                    # 'windward_180':[0, 1],
+                    # 'windward_250':[1, 0],
+                    # 'windward_290': [0, 1]
+                     }
+    thresholds_z = {'z0':[0.0002, 0.005, 0.03, 0.1, 0.25, 0.5, 1]
+                    }
+
+    # gdf['base_score'] = 0
+
+    for wdir in wdir_list:
+        columns = ['average_height_neg', 'UC', 'WL', 'LH_neg', 'z0']
+        to_score = 'score_%s' % wdir
+        gdf['score_%s' % wdir] = 0
+
+        for key in thresholds_5:
+            if key == 'impact':
+                nkey_5 = 'impact_%s' % wdir
+                columns.append(nkey_5)
+            else:
+                nkey_5 = key
+            gdf[to_score].loc[gdf[nkey_5]<=thresholds_5[key][0]] += 5
+            gdf[to_score].loc[gdf[nkey_5].between(thresholds_5[key][0], thresholds_5[key][1])] += 4
+            gdf[to_score].loc[gdf[nkey_5].between(thresholds_5[key][1], thresholds_5[key][2])] += 3
+            gdf[to_score].loc[gdf[nkey_5].between(thresholds_5[key][2], thresholds_5[key][3])] += 2
+            gdf[to_score].loc[gdf[nkey_5].between(thresholds_5[key][3], thresholds_5[key][4])] += 1
+            gdf[to_score].loc[gdf[nkey_5]>thresholds_5[key][4]] += 1
+    
+        for key in thresholds_3:
+            gdf[to_score].loc[gdf[key]<=thresholds_3[key][0]] += 3
+            gdf[to_score].loc[gdf[key].between(thresholds_3[key][0], thresholds_3[key][1])] += 2
+            gdf[to_score].loc[gdf[key].between(thresholds_3[key][1], thresholds_3[key][2])] += 1
+            gdf[to_score].loc[gdf[key]>thresholds_3[key][2]] += 1
+    
+        for key in thresholds_2:
+            if key == 'windward':
+                nkey_2 = 'windward_%s' % wdir
+                columns.append(nkey_2)
+            else:
+                nkey_2 = key
+            gdf[to_score].loc[gdf[nkey_2]==thresholds_2[key][0]] += 2
+            gdf[to_score].loc[gdf[nkey_2]==thresholds_2[key][1]] += 1
+    
+        for key in thresholds_z:
+            gdf[to_score].loc[gdf[key]==thresholds_z[key][0]] += 5
+            gdf[to_score].loc[gdf[key]==thresholds_z[key][1]] += 4
+            gdf[to_score].loc[gdf[key]==thresholds_z[key][2]] += 3
+            gdf[to_score].loc[gdf[key]==thresholds_z[key][3]] += 2
+            gdf[to_score].loc[gdf[key]>=thresholds_z[key][4]] += 1
+
+        gdf.loc[gdf[columns].isna().any(1), 'score_%s' % wdir] = np.nan
+
+    # pd.options.display.max_columns = None
+    # print(gdf.head(20))
+    # print('hodl')
+    # # ['score_0', 'score_30', 'score_60', 'score_90', 'score_120', 'score_150',
+    # # 'score_180', 'score_210', 'score_240', 'score_270', 'score_300', 'score_330']
+    # gdf.loc[gdf.isnull(), ['score_0', 'score_30', 'score_60', 'score_90', 'score_120', 'score_150',
+    # 'score_180', 'score_210', 'score_240', 'score_270', 'score_300', 'score_330']] = np.nan
+    # print(gdf.isnull())
+    # gdf.loc[gdf['average_height_neg'].isnull(), 'score_0'] = np.nan
+    return gdf
+    # for key in my_dict:
+    #     print(gdf[key].describe())
+
+def score():
+    sql = "SELECT * FROM public.final_all_wdir"
+    db_connection_url = "postgres://postgres:0000000@127.0.0.1:5432/thesisData"
+    engine = create_engine(db_connection_url)
+    gdf = gpd.read_postgis(sql, con=engine)
+    # gdf = gdf[['id_2', 'geom', 'average_length', 'average_height', 'UC',
+    #            'group_length', 'max', 'z0', 'azimuth', 'windward_250', 'impact_250',
+    #            'windward_180', 'impact_180', 'windward_290', 'impact_290']]
+    gdf = gdf[['id_3', 'geom', 'average_length', 'average_height', 'UC',
+               'group_length', 'max', 'z0', 'azimuth',
+               'windward_0', 'impact_0',
+               'windward_30', 'impact_30',
+               'windward_60', 'impact_60',
+               'windward_90', 'impact_90',
+               'windward_120', 'impact_120',
+               'windward_150', 'impact_150',
+               'windward_180', 'impact_180',
+               'windward_210', 'impact_210',
+               'windward_240', 'impact_240',
+               'windward_270', 'impact_270',
+               'windward_300', 'impact_300',
+               'windward_330', 'impact_330',
+               ]]
+    gdf['WL'] = gdf['average_length'] / gdf['group_length']
+    gdf['LH'] = gdf['group_length'] / gdf['average_height']
+    # gdf[['impact_250', 'impact_180', 'impact_290']] = gdf[['impact_250', 'impact_180', 'impact_290']].abs()
+
+    # my_scores = {'average_height': 5,
+    #              'UC': 5,
+    #              'WL': 3,
+    #              'LH':3,
+    #              'z0': 6,
+    #              'windward_180':2,
+    #              'windward_250':2,
+    #              'windward_290':2,
+    #              'impact_180':5,
+    #              'impact_250':5,
+    #              'impact_290':5,
+    #              }
+
+    calc_score(gdf).to_postgis(name='scored_nan_2', con=engine, if_exists='replace')
+
+def score_table():
+    print('hodl')
+    table = pd.read_excel("/Users/wesseldejongh/Dropbox/MScThesis/Files/temp_table_values.xlsx", sheet_name="Sheet2")
+    table['parameter/score'] = ["\textbf{"+x+"}" for x in table['parameter/score']]
+    print(table.to_latex(na_rep="",escape=False, index=False, bold_rows=True, multirow=True, column_format="@{}l >{$}r<{$} >{$}r<{$} >{$}r<{$} >{$}r<{$} >{$}r<{$}@{}"))
 def main():
     # starttime = time.time()
     """
@@ -995,46 +1412,72 @@ def main():
     # Or pick a street and find surrounding buildings and streets
 
     # usefull parameters:
-    wind_direction = 135
+    wind_direction_compas = [200, 270, 160]
+    # wind_direction = (450 - wind_direction_compas) % 360
+    wind_direction = [(450 - x) % 360 for x in wind_direction_compas]
     percentile = 0.65
+    wind_direction_top = [0, 30, 60, 90, 120, 150]
 
+    wind_direction_bottom = [0, 30, 60, 90, 120, 150, 180, 210, 240, 270, 300, 330]
     # tall_buildings(get_roads(), plot=True)
     # fad(get_roads(), plot=True)
     # get_weather()
     # windward(tall_buildings(plot=None), wind_direction, plot=True)
     # urban_canyon_AR()
     # mine = get_bufferRoads()
-
     # my_shadows = flows(tall_buildings(), wind_direction, percentile)
 
     ##unfinshed:
     # create_table('what')
     # connecting_roads()
 
-    consecutive_facades(all_buildingQuery())
+    ## Working on:
+    # building_stats()
 
-    # start = time.time()
-    # # UC = urbanCanyon(all_buildingQuery())
-    # elapsed_time_UC = (time.time() - start)
-    # print(elapsed_time_UC)
-
-    # gdf_windward = gpd.GeoDataFrame(my_test_temp, crs='epsg:28992')
-    # ax = gdf_windward.plot(column='windward', k=2, cmap='viridis', legend=True, linewidth=0.5)
-    # gpd.GeoDataFrame(shadow, crs='epsg:28992').set_index('id').plot(ax=ax, linewidth=0.5, color='k')
-    # plt.show()
-
+    start = time.time()
+    # UC = urbanCanyon(all_buildingQuery())
+    # consecutive_facades(all_buildingQuery(), wind_direction_bottom)
+    # roughness()
+    score()
+    # score_table()
+    elapsed_time_UC = (time.time() - start)
+    print(elapsed_time_UC)
     print('baana')
 
+    # my_query = 'SELECT simplified.id, ST_AsText(ST_ForcePolygonCCW(ST_CurveToLine(simplified.geom))), public.cbs_buurt_2019_gegeneraliseerd.id as buurt_id ' \
+    #            'FROM public.simplified, public.cbs_buurt_2019_gegeneraliseerd ' \
+    #            'WHERE ST_Intersects(ST_CurveToLine(simplified.geom), cbs_buurt_2019_gegeneraliseerd.geom); '
+    #
+    # cursor.execute(my_query)
+    # record_simplified = cursor.fetchall()
+    #
+    # simplified = []
+    #
+    # for row in record_simplified:
+    #     for n, item in enumerate(list(row[1])):
+    #         coords = list(item.exterior.coords)
+    #         feature = {'id_simp': row[0],
+    #                    'id_n': n,
+    #                    'geometry': list(shapely.wkt.loads(item)),
+    #                    # 'geometry': shapely.wkt.loads(row[1]),
+    #                    'buurt_id': row[2]
+    #                    }
+    #
+    #         simplified.append(feature)
+    #
+    # ## to write windward to db and merge with with voronoi
+    # # db_connection_url = "postgres://postgres:0000000@127.0.0.1:5432/thesisData"
+    # # engine = create_engine(db_connection_url)
+    # # wind_n = windward(simplified, wind_direction)
+    # # gdf_done = gpd.GeoDataFrame(wind_n, crs='epsg:28992').set_index('id', drop=False)
+    # # gdf_done.to_postgis(name='windward_%d_simp' % wind_direction, con=engine, if_exists='replace')
 
-    # df = pd.read_csv("http://weather.tudelft.nl/csv/Delfshaven.csv", header=None).tail(20)
-    # whatsthis = df.to_string()
-    # with open("weather.csv", mode=w):
 
     # endtime = time.time()
     # duration = endtime - starttime
     # print("Runtime: ", round(duration, 2), "s")
 
-    print('banana ending')
+    print('hodl ending, paper hands')
 
 if __name__ == '__main__':
     try:
